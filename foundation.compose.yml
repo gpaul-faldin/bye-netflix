@@ -1,0 +1,239 @@
+version: '3.8'
+
+services:
+
+  #######################CORE#######################
+
+  # Media Server
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    hostname: My-plex-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+      - VERSION=docker
+      - PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx
+    volumes:
+      - ./config/plex:/config
+      - ./media:/data/media
+    ports:
+      - "32400:32400"
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  # Torrent Client
+  deluge:
+    image: lscr.io/linuxserver/deluge:latest
+    container_name: deluge
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+      - DELUGE_LOGLEVEL=error
+    volumes:
+      - ./config/deluge:/config
+      - ./downloads:/downloads
+      - ./media:/media
+    ports:
+      - "8112:8112"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  #YggTorrent indexer
+  ygege:
+    image: uwucode/ygege:latest
+    container_name: ygege
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - BIND_IP=0.0.0.0
+      - BIND_PORT=8715
+      - LOG_LEVEL=debug
+    volumes:
+      - ./config/ygege/sessions:/app/sessions
+      - ./config/ygege/config.json:/app/config.json
+    ports:
+      - 8715:8715
+    networks:
+      - media-network
+
+  # Indexer Manager
+  prowlarr:
+    image: ghcr.io/almottier/prowlarr-ygg
+    container_name: prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    networks:
+      - media-network
+    depends_on:
+      - ygege
+    restart: unless-stopped
+
+
+  #######################MANAGEMENT#######################
+
+  # Movie Management
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/radarr:/config
+      - ./media/movies:/movies
+      - ./downloads:/downloads
+    ports:
+      - "7878:7878"
+    networks:
+      - media-network
+    depends_on:
+      - prowlarr
+      - deluge
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/sonarr:/config
+      - ./media/tv:/tv
+      - ./downloads:/downloads
+    ports:
+      - "8989:8989"
+    networks:
+      - media-network
+    depends_on:
+      - prowlarr
+      - deluge
+    restart: unless-stopped
+
+  #######################QOL#######################
+
+  #Plex watchlist integration to *RR stack
+  fetcharr:
+    image: ghcr.io/fetcharr/fetcharr:latest
+    container_name: fetcharr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/fetcharr:/config
+    ports:
+      - "8080:8080"
+    networks:
+      - media-network
+    depends_on:
+      - sonarr
+      - radarr
+    restart: unless-stopped
+
+  # Subtitle Management
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/bazarr:/config
+      - ./media/movies:/movies
+      - ./media/tv:/tv
+    ports:
+      - "6767:6767"
+    networks:
+      - media-network
+    depends_on:
+      - radarr
+      - sonarr
+    restart: unless-stopped
+
+  # Request Management & Discovery
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/overseerr:/config
+    ports:
+      - "5055:5055"
+    networks:
+      - media-network
+    depends_on:
+      - plex
+      - radarr
+      - sonarr
+    restart: unless-stopped
+
+  # Push information to trakt
+  # plextraktsync:
+  #   image: ghcr.io/taxel/plextraktsync
+  #   command: sync
+  #   container_name: plextraktsync
+  #   volumes:
+  #     - ./config/plexTraktSync:/app/config
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - TZ=Europe/Paris
+  #   networks:
+  #     - media-network
+  #   depends_on:
+  #     - plex
+  #   restart: on-failure:2
+
+networks:
+  media-network:
+    driver: bridge
+
+# VPN Configuration (ready for later)
+# Uncomment when ready to enable VPN:
+#
+#  gluetun:
+#    image: qmcgaw/gluetun:latest
+#    container_name: gluetun
+#    cap_add:
+#      - NET_ADMIN
+#    environment:
+#      - VPN_SERVICE_PROVIDER=your_provider
+#      - VPN_TYPE=openvpn
+#      - OPENVPN_USER=your_user
+#      - OPENVPN_PASSWORD=your_pass
+#    volumes:
+#      - ./config/gluetun:/config
+#    ports:
+#      - "8112:8112"  # Move Deluge port here
+#      - "6881:6881"  # Move torrent ports here
+#    networks:
+#      - media-network
+#    restart: unless-stopped
+#
+# To enable VPN:
+# 1. Uncomment gluetun service above
+# 2. Remove deluge ports section
+# 3. Add to deluge service:
+#    network_mode: "service:gluetun"
+#    depends_on: [gluetun]

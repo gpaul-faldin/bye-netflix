@@ -1,0 +1,13 @@
+version: "2"
+services:
+  plextraktsync:
+    image: ghcr.io/taxel/plextraktsync
+    command: sync
+    container_name: plextraktsync
+    restart: on-failure:2
+    volumes:
+      - ./config/plexTraktSync:/app/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Tallinn

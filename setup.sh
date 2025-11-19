@@ -35,6 +35,19 @@ print_header() {
     echo -e "${BLUE}======================================${NC}\n"
 }
 
+# Detect which docker compose command to use (docker compose vs docker-compose)
+detect_compose_cmd() {
+    # Prefer Docker CLI 'docker compose' if available
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        COMPOSE_CMD="docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        COMPOSE_CMD="$(command -v docker-compose)"
+    else
+        print_error "Neither 'docker compose' nor 'docker-compose' is available. Please install Docker Compose v1 or v2."
+        exit 1
+    fi
+}
+
 # Check if running as root
 if [[ $EUID -eq 0 ]]; then
    print_error "This script should not be run as root for security reasons"
@@ -53,11 +66,15 @@ check_requirements() {
     print_success "Docker found"
     
     # Check Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
-        print_error "Docker Compose is not installed. Please install Docker Compose first."
+    # Check Docker Compose (either v2 'docker compose' or v1 'docker-compose')
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        print_success "Docker Compose (docker compose) found"
+    elif command -v docker-compose &> /dev/null; then
+        print_success "Docker Compose (docker-compose) found"
+    else
+        print_error "Docker Compose is not installed. Please install Docker Compose (v1 or v2) first."
         exit 1
     fi
-    print_success "Docker Compose found"
     
     # Check if user is in docker group
     if ! groups $USER | grep &>/dev/null '\bdocker\b'; then
@@ -79,17 +96,21 @@ create_directories() {
     print_header "Creating Directory Structure"
     
     # Create main directories
+    # Read MEDIA_DIR from environment or default to ./media
+    : "${MEDIA_DIR:=/srv}"
+
     mkdir -p config/{plex,radarr,sonarr,prowlarr,overseerr,bazarr,fetcharr,ygege}
-    mkdir -p downloads/{incomplete,complete}
-    mkdir -p media/{movies,tv}
+    # Create downloads inside MEDIA_DIR so hardlinks can work when media and downloads share the same filesystem
+    mkdir -p "$MEDIA_DIR"/downloads/incomplete "$MEDIA_DIR"/downloads/complete
+    mkdir -p "$MEDIA_DIR"/movies "$MEDIA_DIR"/tv
     
     print_success "Directory structure created"
     
     # Set permissions (PUID=1000, PGID=1000)
     print_status "Setting directory permissions..."
-    sudo chown -R 1000:1000 config downloads media 2>/dev/null || {
+    sudo chown -R 1000:1000 config "$MEDIA_DIR" 2>/dev/null || {
         print_warning "Could not set ownership to 1000:1000. Containers may have permission issues."
-        print_warning "If you encounter issues, run: sudo chown -R 1000:1000 config downloads media"
+        print_warning "If you encounter issues, run: sudo chown -R 1000:1000 config $MEDIA_DIR"
     }
     
     print_success "Permissions configured"
@@ -131,14 +152,11 @@ create_ygge_config() {
     
     cat > ./config/ygege/config.json << EOF
 {
-  "username": "$YGG_USERNAME",
-  "password": "$YGG_PASSWORD",
-  "passkey": "",
-  "rss": "",
-  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  "timeout": 30,
-  "delay": 1,
-  "retries": 3
+    "username": "$YGG_USERNAME",
+    "password": "$YGG_PASSWORD",
+    "bind_ip": "0.0.0.0",
+    "bind_port": 8715,
+    "log_level": "debug"
 }
 EOF
     
@@ -150,7 +168,7 @@ update_docker_compose() {
     print_status "Updating Docker Compose configuration..."
     
     # Update Plex claim token in docker-compose.yml
-    sed -i "s/PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx/PLEX_CLAIM=$PLEX_CLAIM/" foundation_compose.yml
+    sed -i "s/PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx/PLEX_CLAIM=$PLEX_CLAIM/" foundation.compose.yml
     
     print_success "Docker Compose configuration updated"
 }
@@ -160,7 +178,8 @@ start_containers() {
     print_header "Starting Containers"
     
     print_status "Starting containers... This may take a few minutes to download images."
-    docker-compose -f foundation_compose.yml up -d
+    # Use detected compose command
+    eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
     
     print_status "Waiting for containers to start..."
     sleep 30
@@ -179,7 +198,7 @@ start_containers() {
         print_success "All containers started successfully"
     else
         print_warning "Some containers failed to start: ${failed_containers[*]}"
-        print_warning "Check logs with: docker-compose logs <container_name>"
+    print_warning "Check logs with: docker compose logs <container_name> or docker-compose logs <container_name>"
     fi
 }
 
@@ -203,18 +222,18 @@ display_access_info() {
     
     echo -e "\n${BLUE}Next Steps:${NC}"
     echo -e "  1. Visit Plex and complete the initial setup"
-    echo -e "  2. Add Movie library pointing to: /data/media/movies"
-    echo -e "  3. Add TV Show library pointing to: /data/media/tv"
+    echo -e "  2. Add Movie library pointing to: /data/media/movies (host: $MEDIA_DIR/movies)"
+    echo -e "  3. Add TV Show library pointing to: /data/media/tv (host: $MEDIA_DIR/tv)"
     echo -e "  4. Configure Prowlarr indexers (YggTorrent should auto-configure)"
     echo -e "  5. Connect Radarr/Sonarr to Prowlarr and Deluge"
     echo -e "  6. Configure Overseerr to connect to Plex, Radarr, and Sonarr"
     echo -e "  7. Set up quality profiles for 4K content"
     
     echo -e "\n${BLUE}Configuration Files:${NC}"
-    echo -e "  Main config: ./foundation_compose.yml"
+    echo -e "  Main config: ./foundation.compose.yml"
     echo -e "  Configs stored in: ./config/"
-    echo -e "  Downloads: ./downloads/"
-    echo -e "  Media library: ./media/"
+    echo -e "  Downloads: $MEDIA_DIR/downloads/"
+    echo -e "  Media library (host): $MEDIA_DIR"
     
     echo -e "\n${YELLOW}Important Notes:${NC}"
     echo -e "  - Your Plex claim token expires in 4 minutes after generation"
@@ -231,7 +250,16 @@ create_systemd_service() {
         print_status "Creating systemd service for auto-start..."
         
         SERVICE_DIR="$PWD"
-        
+        # Decide what to write into the systemd unit based on the compose command
+        if [[ "$COMPOSE_CMD" == "docker compose" ]]; then
+            UNIT_EXEC_START="/bin/sh -c 'docker compose -f $SERVICE_DIR/foundation.compose.yml up -d'"
+            UNIT_EXEC_STOP="/bin/sh -c 'docker compose -f $SERVICE_DIR/foundation.compose.yml down'"
+        else
+            # COMPOSE_CMD contains absolute path to docker-compose binary
+            UNIT_EXEC_START="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/foundation.compose.yml up -d'"
+            UNIT_EXEC_STOP="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/foundation.compose.yml down'"
+        fi
+
         sudo tee /etc/systemd/system/media-server.service > /dev/null << EOF
 [Unit]
 Description=Media Server Stack
@@ -242,8 +270,8 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$SERVICE_DIR
-ExecStart=/usr/bin/docker-compose -f foundation_compose.yml up -d
-ExecStop=/usr/bin/docker-compose -f foundation_compose.yml down
+ExecStart=$UNIT_EXEC_START
+ExecStop=$UNIT_EXEC_STOP
 TimeoutStartSec=0
 
 [Install]
@@ -279,7 +307,8 @@ main() {
         exit 0
     fi
     
-    # Run setup steps
+    # Determine compose command and run setup steps
+    detect_compose_cmd
     check_requirements
     create_directories
     collect_credentials
@@ -295,33 +324,35 @@ main() {
     display_access_info
     
     # Create a simple management script
-    cat > manage.sh << 'EOF'
+    # Create a management script that respects the compose command used by this setup
+    cat > manage.sh << EOF
 #!/bin/bash
 # Media Server Management Script
+COMPOSE_CMD="$COMPOSE_CMD"
 
 case "$1" in
     start)
-        docker-compose -f foundation_compose.yml up -d
+        eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
         echo "Media server started"
         ;;
     stop)
-        docker-compose -f foundation_compose.yml down
+        eval "$COMPOSE_CMD -f foundation.compose.yml down"
         echo "Media server stopped"
         ;;
     restart)
-        docker-compose -f foundation_compose.yml restart
+        eval "$COMPOSE_CMD -f foundation.compose.yml restart"
         echo "Media server restarted"
         ;;
     update)
-        docker-compose -f foundation_compose.yml pull
-        docker-compose -f foundation_compose.yml up -d
+        eval "$COMPOSE_CMD -f foundation.compose.yml pull"
+        eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
         echo "Media server updated"
         ;;
     logs)
-        docker-compose -f foundation_compose.yml logs -f $2
+        eval "$COMPOSE_CMD -f foundation.compose.yml logs -f $2"
         ;;
     status)
-        docker-compose -f foundation_compose.yml ps
+        eval "$COMPOSE_CMD -f foundation.compose.yml ps"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|update|logs [service]|status}"

@@ -208,7 +208,7 @@ display_configuration_summary() {
     echo -e "  📝 Configure Bazarr subtitle providers"
     
     echo -e "\n${YELLOW}Tips:${NC}"
-    echo -e "  • Use 'docker-compose logs <service>' to troubleshoot issues"
+        echo -e "  • Use 'docker compose logs <service>' or 'docker-compose logs <service>' to troubleshoot issues"
     echo -e "  • Enable hardlinks in Radarr/Sonarr to save storage"
     echo -e "  • Test with a popular movie first to verify the pipeline"
     echo -e "  • Set up quality profiles before adding large libraries"

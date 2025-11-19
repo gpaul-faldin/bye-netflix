@@ -14,10 +14,10 @@ services:
       - PGID=1000
       - TZ=Europe/Paris
       - VERSION=docker
-      - PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx
+      - PLEX_CLAIM=claim-1Cfz414fZn5kX7tpm2Hq
     volumes:
       - ./config/plex:/config
-      - ./media:/data/media
+      - /srv:/srv
     ports:
       - "32400:32400"
     networks:
@@ -35,12 +35,12 @@ services:
       - DELUGE_LOGLEVEL=error
     volumes:
       - ./config/deluge:/config
-      - ./downloads:/downloads
-      - ./media:/media
+      - /srv:/srv
     ports:
       - "8112:8112"
       - "6881:6881"
       - "6881:6881/udp"
+      - "58846:58846"
     networks:
       - media-network
     restart: unless-stopped
@@ -95,8 +95,7 @@ services:
       - TZ=Europe/Paris
     volumes:
       - ./config/radarr:/config
-      - ./media/movies:/movies
-      - ./downloads:/downloads
+      - /srv:/srv
     ports:
       - "7878:7878"
     networks:
@@ -106,6 +105,7 @@ services:
       - deluge
     restart: unless-stopped
 
+  # Tvshow Management
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
@@ -115,8 +115,7 @@ services:
       - TZ=Europe/Paris
     volumes:
       - ./config/sonarr:/config
-      - ./media/tv:/tv
-      - ./downloads:/downloads
+      - /srv:/srv
     ports:
       - "8989:8989"
     networks:
@@ -124,6 +123,42 @@ services:
     depends_on:
       - prowlarr
       - deluge
+    restart: unless-stopped
+
+  # Bypass Cloudflare
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_HTML=${LOG_HTML:-false}
+      - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+      - TZ=Europe/Paris
+    ports:
+      - "8191:8191"
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  # Tautulli - Plex monitoring and statistics
+  tautulli:
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/tautulli/config:/config
+      - ./config/tautulli/scripts:/scripts
+    ports:
+      - 8181:8181
+    networks:
+      - media-network
+    depends_on:
+      - plex
+      - sonarr
+      - radarr
     restart: unless-stopped
 
   #######################QOL#######################
@@ -157,8 +192,7 @@ services:
       - TZ=Europe/Paris
     volumes:
       - ./config/bazarr:/config
-      - ./media/movies:/movies
-      - ./media/tv:/tv
+      - /srv:/srv
     ports:
       - "6767:6767"
     networks:

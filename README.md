@@ -61,10 +61,13 @@ If you prefer manual setup or the script fails:
 
 ### 1. Initial Setup
 ```bash
-# Create directories
-mkdir -p {config/{plex,radarr,sonarr,prowlarr,overseerr,bazarr,fetcharr,ygege},downloads/{incomplete,complete},media/{movies,tv}}
+# Create directories (example using MEDIA_DIR=/srv)
+mkdir -p {config/{plex,radarr,sonarr,prowlarr,overseerr,bazarr,fetcharr,ygege},/srv/downloads/{incomplete,complete},/srv/{movies,tv}}
 
-# Start containers
+# Start containers (use whichever compose command your system provides)
+# If you have Docker Compose v2 (recommended):
+docker compose up -d
+# Otherwise, with the older docker-compose binary:
 docker-compose up -d
 ```
 
@@ -116,8 +119,9 @@ docker-compose up -d
 ### 7. Deluge Configuration
 1. Access: `http://server:8112`, password: `deluge`
 2. Preferences → Downloads:
-   - **Download to**: `/downloads/incomplete`
-   - **Move completed to**: `/downloads/complete`
+   - **Download to** (inside container): `/downloads/incomplete`
+   - **Move completed to** (inside container): `/downloads/complete`
+     (these are mapped to `${MEDIA_DIR:-/srv}/downloads/incomplete` and `.../complete` on the host)
    - **✅ Move completed downloads**
 
 ### 8. Overseerr Setup
@@ -218,7 +222,7 @@ deluge:
 
 ### Hardlinks not working
 - Ensure downloads and media folders are on same filesystem
-- Check `df ./downloads` vs `df ./media` should match
+ - Check `df ${MEDIA_DIR:-./media}/downloads` vs `df ${MEDIA_DIR:-./media}` should match (host paths should be on the same filesystem; default MEDIA_DIR=/srv)
 - Enable hardlinks in Radarr/Sonarr settings
 
 ### No 4K content found
@@ -241,9 +245,9 @@ deluge:
 ## 🔄 Updates
 
 ```bash
-# Update containers
-docker-compose pull
-docker-compose up -d
+# Update containers (use either docker compose or docker-compose)
+docker compose pull || docker-compose pull
+docker compose up -d || docker-compose up -d
 
 # Backup configs before major updates
 tar -czf backup-$(date +%Y%m%d).tar.gz ./config/
@@ -251,9 +255,9 @@ tar -czf backup-$(date +%Y%m%d).tar.gz ./config/
 
 ## 🆘 Support
 
-- Check container logs: `docker-compose logs <service_name>`
-- Restart specific service: `docker-compose restart <service_name>`
-- Full restart: `docker-compose down && docker-compose up -d`
+ - Check container logs: `docker compose logs <service_name>` or `docker-compose logs <service_name>`
+ - Restart specific service: `docker compose restart <service_name>` or `docker-compose restart <service_name>`
+ - Full restart: `docker compose down && docker compose up -d` or `docker-compose down && docker-compose up -d`
 
 ---
 

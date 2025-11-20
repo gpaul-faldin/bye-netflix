@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir requests
+
+# Copy the script
+COPY trakt-watchlist-sync.py /app/
+
+# Make it executable
+RUN chmod +x /app/trakt-watchlist-sync.py
+
+# Run the service
+CMD ["python", "-u", "/app/trakt-watchlist-sync.py"]

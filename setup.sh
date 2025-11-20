@@ -168,7 +168,7 @@ update_docker_compose() {
     print_status "Updating Docker Compose configuration..."
     
     # Update Plex claim token in docker-compose.yml
-    sed -i "s/PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx/PLEX_CLAIM=$PLEX_CLAIM/" foundation.compose.yml
+    sed -i "s/PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx/PLEX_CLAIM=$PLEX_CLAIM/" docker.compose.yml
     
     print_success "Docker Compose configuration updated"
 }
@@ -179,7 +179,7 @@ start_containers() {
     
     print_status "Starting containers... This may take a few minutes to download images."
     # Use detected compose command
-    eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
+    eval "$COMPOSE_CMD -f docker.compose.yml up -d"
     
     print_status "Waiting for containers to start..."
     sleep 30
@@ -230,7 +230,7 @@ display_access_info() {
     echo -e "  7. Set up quality profiles for 4K content"
     
     echo -e "\n${BLUE}Configuration Files:${NC}"
-    echo -e "  Main config: ./foundation.compose.yml"
+    echo -e "  Main config: ./docker.compose.yml"
     echo -e "  Configs stored in: ./config/"
     echo -e "  Downloads: $MEDIA_DIR/downloads/"
     echo -e "  Media library (host): $MEDIA_DIR"
@@ -252,12 +252,12 @@ create_systemd_service() {
         SERVICE_DIR="$PWD"
         # Decide what to write into the systemd unit based on the compose command
         if [[ "$COMPOSE_CMD" == "docker compose" ]]; then
-            UNIT_EXEC_START="/bin/sh -c 'docker compose -f $SERVICE_DIR/foundation.compose.yml up -d'"
-            UNIT_EXEC_STOP="/bin/sh -c 'docker compose -f $SERVICE_DIR/foundation.compose.yml down'"
+            UNIT_EXEC_START="/bin/sh -c 'docker compose -f $SERVICE_DIR/docker.compose.yml up -d'"
+            UNIT_EXEC_STOP="/bin/sh -c 'docker compose -f $SERVICE_DIR/docker.compose.yml down'"
         else
             # COMPOSE_CMD contains absolute path to docker-compose binary
-            UNIT_EXEC_START="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/foundation.compose.yml up -d'"
-            UNIT_EXEC_STOP="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/foundation.compose.yml down'"
+            UNIT_EXEC_START="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/docker.compose.yml up -d'"
+            UNIT_EXEC_STOP="$(command -v sh) -c '$COMPOSE_CMD -f $SERVICE_DIR/docker.compose.yml down'"
         fi
 
         sudo tee /etc/systemd/system/media-server.service > /dev/null << EOF
@@ -332,27 +332,27 @@ COMPOSE_CMD="$COMPOSE_CMD"
 
 case "$1" in
     start)
-        eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
+        eval "$COMPOSE_CMD -f docker.compose.yml up -d"
         echo "Media server started"
         ;;
     stop)
-        eval "$COMPOSE_CMD -f foundation.compose.yml down"
+        eval "$COMPOSE_CMD -f docker.compose.yml down"
         echo "Media server stopped"
         ;;
     restart)
-        eval "$COMPOSE_CMD -f foundation.compose.yml restart"
+        eval "$COMPOSE_CMD -f docker.compose.yml restart"
         echo "Media server restarted"
         ;;
     update)
-        eval "$COMPOSE_CMD -f foundation.compose.yml pull"
-        eval "$COMPOSE_CMD -f foundation.compose.yml up -d"
+        eval "$COMPOSE_CMD -f docker.compose.yml pull"
+        eval "$COMPOSE_CMD -f docker.compose.yml up -d"
         echo "Media server updated"
         ;;
     logs)
-        eval "$COMPOSE_CMD -f foundation.compose.yml logs -f $2"
+        eval "$COMPOSE_CMD -f docker.compose.yml logs -f $2"
         ;;
     status)
-        eval "$COMPOSE_CMD -f foundation.compose.yml ps"
+        eval "$COMPOSE_CMD -f docker.compose.yml ps"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|update|logs [service]|status}"

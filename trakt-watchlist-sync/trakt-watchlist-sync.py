@@ -43,7 +43,7 @@ class TraktWatchlistSync:
         self.sonarr_quality_profile = os.getenv('SONARR_QUALITY_PROFILE', 'Any')
         
         # Sync Configuration
-        self.poll_interval = int(os.getenv('POLL_INTERVAL'))
+        self.poll_interval = int(os.getenv('POLL_INTERVAL', '30'))
         self.tokens = None
         
         # Validate configuration
@@ -397,7 +397,7 @@ class TraktWatchlistSync:
             return False
     
     def add_show_to_sonarr(self, show_data: Dict) -> bool:
-        """Add show to Sonarr (Season 1 only, first 3 episodes)"""
+        """Add show to Sonarr - Download full Season 1 if available, else first 3 episodes"""
         try:
             show = show_data.get('show', {})
             title = show.get('title')
@@ -422,11 +422,28 @@ class TraktWatchlistSync:
             
             sonarr_show = lookup_results[0]
             
-            # Configure seasons - only Season 1
+            # Check if Season 1 exists and has episodes
             seasons = sonarr_show.get('seasons', [])
+            season_1 = next((s for s in seasons if s.get('seasonNumber') == 1), None)
+            
+            if not season_1:
+                logger.warning(f"Season 1 not found for show: {title}")
+                return False
+            
+            season_1_episode_count = season_1.get('statistics', {}).get('totalEpisodeCount', 0)
+            
+            # Determine strategy based on Season 1 availability
+            if season_1_episode_count > 0:
+                logger.info(f"Season 1 has {season_1_episode_count} episodes - will download full season")
+                download_full_season = True
+            else:
+                logger.info(f"Season 1 not fully available yet - will download first 3 episodes only")
+                download_full_season = False
+            
+            # Configure seasons
             for season in seasons:
                 if season.get('seasonNumber') == 1:
-                    season['monitored'] = True  # Monitor Season 1 for download
+                    season['monitored'] = True if download_full_season else False
                 else:
                     season['monitored'] = False
             
@@ -439,10 +456,10 @@ class TraktWatchlistSync:
                 'images': sonarr_show.get('images', []),
                 'seasons': seasons,
                 'rootFolderPath': self.sonarr_root_folder,
-                'monitored': True,  # MUST be monitored for automatic download
+                'monitored': True,  # Series must be monitored
                 'seasonFolder': True,
                 'addOptions': {
-                    'searchForMissingEpisodes': True  # Search immediately
+                    'searchForMissingEpisodes': download_full_season  # Only search if full season
                 }
             }
             
@@ -459,18 +476,41 @@ class TraktWatchlistSync:
             series_id = result.get('id')
             
             if series_id:
-                # Trigger search for Season 1, Episode 1-3
-                self._search_season_episodes(series_id, 1, [1, 2, 3])
+                if download_full_season:
+                    # Trigger full season search
+                    logger.info(f"Triggering full Season 1 search for {title}")
+                    self._search_full_season(series_id, 1)
+                else:
+                    # Fallback: Download only first 3 episodes
+                    logger.info(f"Triggering download for first 3 episodes of {title}")
+                    self._search_first_episodes(series_id, 1, 3)
             
-            logger.info(f"✅ Added show to Sonarr: {title} (Season 1, Episodes 1-3)")
+            logger.info(f"✅ Added show to Sonarr: {title}")
             return True
             
         except Exception as e:
             logger.error(f"Error adding show to Sonarr: {e}")
             return False
     
-    def _search_season_episodes(self, series_id: int, season_number: int, episode_numbers: List[int]):
-        """Search for specific episodes"""
+    def _search_full_season(self, series_id: int, season_number: int):
+        """Search for entire season"""
+        try:
+            payload = {
+                'name': 'SeasonSearch',
+                'seriesId': series_id,
+                'seasonNumber': season_number
+            }
+            requests.post(
+                f"{self.sonarr_url}/api/v3/command",
+                json=payload,
+                headers={'X-Api-Key': self.sonarr_api_key}
+            )
+            logger.info(f"Triggered full season {season_number} search")
+        except Exception as e:
+            logger.error(f"Error searching for season: {e}")
+    
+    def _search_first_episodes(self, series_id: int, season_number: int, episode_count: int):
+        """Search for first N episodes of a season"""
         try:
             # Get all episodes for the series
             episodes_response = requests.get(
@@ -481,21 +521,33 @@ class TraktWatchlistSync:
             episodes_response.raise_for_status()
             all_episodes = episodes_response.json()
             
-            # Filter for Season 1, Episodes 1-3
-            episode_ids = [
-                ep['id'] for ep in all_episodes
-                if ep.get('seasonNumber') == season_number and ep.get('episodeNumber') in episode_numbers
+            # Filter for first N episodes of the season
+            season_episodes = [
+                ep for ep in all_episodes
+                if ep.get('seasonNumber') == season_number
             ]
+            season_episodes.sort(key=lambda x: x.get('episodeNumber', 0))
+            
+            # Get first N episodes
+            first_episodes = season_episodes[:episode_count]
+            episode_ids = [ep['id'] for ep in first_episodes]
             
             if episode_ids:
+                # Monitor these episodes
+                monitor_payload = {'episodeIds': episode_ids, 'monitored': True}
+                requests.put(
+                    f"{self.sonarr_url}/api/v3/episode/monitor",
+                    json=monitor_payload,
+                    headers={'X-Api-Key': self.sonarr_api_key}
+                )
+                
                 # Trigger episode search
-                search_payload = {'episodeIds': episode_ids}
                 requests.post(
                     f"{self.sonarr_url}/api/v3/command",
                     json={'name': 'EpisodeSearch', 'episodeIds': episode_ids},
                     headers={'X-Api-Key': self.sonarr_api_key}
                 )
-                logger.info(f"Triggered search for {len(episode_ids)} episodes")
+                logger.info(f"Triggered search for first {len(episode_ids)} episodes")
         except Exception as e:
             logger.error(f"Error searching for episodes: {e}")
     

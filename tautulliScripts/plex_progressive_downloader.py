@@ -4,9 +4,10 @@
 Progressive Season Downloader for Plex + Sonarr + Tautulli
 
 When a user watches an episode, this script will:
-1. Check if they're at the halfway point of the current season
-2. If yes, download the COMPLETE next season (if it exists in Sonarr)
-3. If next season doesn't exist, fall back to downloading next 2-3 episodes
+1. Check if at last available episode → Enable ALL seasons monitoring
+2. Check if they're at the halfway point of the current season
+3. If yes, download the COMPLETE next season (if it exists in Sonarr)
+4. If next season doesn't exist, fall back to downloading next 2-3 episodes
 
 Setup in Tautulli:
 Triggers: Playback Start
@@ -99,6 +100,37 @@ def is_at_season_halfway(episodes, season_number, episode_number):
     log(f"Season {season_number}: Episode {episode_number} of {len(season_eps)} (halfway at {halfway_point:.1f})")
     
     return episode_number >= halfway_point
+
+def is_at_last_available_episode(episodes, season_number, episode_number):
+    """Check if current episode is the last one available (has file)"""
+    # Get all episodes sorted by season and episode number
+    sorted_episodes = sorted(episodes, key=lambda x: (x.get('seasonNumber', 0), x.get('episodeNumber', 0)))
+    
+    # Find current episode index
+    current_index = None
+    for i, ep in enumerate(sorted_episodes):
+        if (int(ep['seasonNumber']) == int(season_number) and 
+            int(ep['episodeNumber']) == int(episode_number)):
+            current_index = i
+            break
+    
+    if current_index is None:
+        return False
+    
+    # Check if there are any episodes after current that have files
+    for ep in sorted_episodes[current_index + 1:]:
+        if ep.get('hasFile', False):
+            return False  # There are more episodes available
+    
+    # Check if there are any future episodes (not yet aired/available)
+    has_future_episodes = False
+    for ep in sorted_episodes[current_index + 1:]:
+        if ep.get('airDateUtc'):  # Episode has an air date (exists in DB)
+            has_future_episodes = True
+            break
+    
+    log(f"At last available episode. Future episodes announced: {has_future_episodes}")
+    return True
 
 def get_next_episodes_buffer(episodes, season_number, episode_number):
     """Get the next N episodes as a buffer (fallback method)"""
@@ -194,6 +226,31 @@ def monitor_season(episodes, season_number):
         sys.stderr.write(f"Sonarr API 'monitor_season' request failed: {e}\n")
         return None
 
+def monitor_all_seasons(series_id):
+    """Enable monitoring for ALL seasons of a series"""
+    series = get_series(series_id)
+    if not series:
+        log(f"Could not get series {series_id}")
+        return False
+    
+    log(f"Enabling monitoring for ALL seasons of {series.get('title', 'Unknown')}")
+    
+    # Ensure series is monitored
+    series['monitored'] = True
+    
+    # Monitor all seasons
+    for season in series.get('seasons', []):
+        season['monitored'] = True
+    
+    try:
+        r = requests.put(SONARR_URL.rstrip('/') + '/api/v3/series/' + str(series_id),
+                        headers=get_headers(True), json=series)
+        log(f"✅ ALL seasons now monitored - Sonarr will handle future episodes automatically")
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Failed to monitor all seasons: {e}\n")
+        return False
+
 def search_season(series_id, season_number):
     """Trigger a search for an entire season in Sonarr"""
     payload = {
@@ -262,6 +319,14 @@ def process_viewing_progress(series_id, season_number, episode_number):
         log("No episodes found in Sonarr")
         return
     
+    # FIRST: Check if we're at the last available episode
+    if is_at_last_available_episode(episodes, season_number, episode_number):
+        log(f"🎯 Reached last available episode! Enabling ALL seasons monitoring...")
+        monitor_all_seasons(series_id)
+        log("✅ Sonarr will now automatically download future episodes when available")
+        return  # Exit - Sonarr takes over from here
+    
+    # SECOND: Continue with progressive download logic
     # Check if next season exists first
     next_season = season_number + 1
     next_season_exists, next_season_eps = is_season_available_in_sonarr(episodes, next_season)

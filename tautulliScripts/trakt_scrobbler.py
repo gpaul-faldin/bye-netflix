@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trakt Scrobbler for Tautulli
+Trakt Scrobbler for Tautulli - Fixed Version
 
 Handles scrobbling to Trakt.tv for:
 - Movies: start, pause, stop (with progress tracking)
 - TV Episodes: start, pause, stop (with progress tracking)
+
+Improvements:
+- Detects episode changes by comparing show/season/episode numbers
+- Resets progress to 0% when starting a new episode
+- Handles progress > 100% by resetting to 0% (Tautulli quirk)
+- Skips pause events when progress < 1% (Trakt requirement)
+- Ignores 409 conflicts on stop (already scrobbled)
+- Better error handling for episode transitions
 
 Setup in Tautulli:
 1. Settings > Notification Agents > Scripts > Add a new notification agent
@@ -42,6 +50,10 @@ TRAKT_CLIENT_ID = '6a329068fe5503480ceaeb5477493a75f7230a457834a0e3f3c0704e7ad0a
 TRAKT_CLIENT_SECRET = 'b278d963bf8e729b6c9d0cb52b1c651c1fb8d08ccd54bd6c0fc92da8df81f263' # Get from https://trakt.tv/oauth/applications
 TRAKT_REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob'
 
+# Tautulli API configuration
+TAUTULLI_URL = 'http://tautulli:8181'
+TAUTULLI_API_KEY = '5c7bdfb1ff274ef59f74df5d2bc6009c'
+
 # File to store access tokens (will be created automatically)
 TOKEN_FILE = './trakt_tokens.json'
 
@@ -51,12 +63,75 @@ WATCH_THRESHOLD = 0.8
 # Enable debug logging
 VERBOSE_LOGGING = True
 
+def get_session_from_tautulli(rating_key):
+    """
+    Fetch current session data from Tautulli API
+    Returns session data with correct progress and session_id
+    """
+    try:
+        url = f"{TAUTULLI_URL}/api/v2"
+        params = {
+            'apikey': TAUTULLI_API_KEY,
+            'cmd': 'get_activity'
+        }
+        
+        log(f"Fetching session data from Tautulli API for rating_key {rating_key}")
+        response = requests.get(url, params=params, timeout=10)
+        
+        if response.status_code != 200:
+            log(f"Tautulli API error: {response.status_code}", error=True)
+            return None
+        
+        data = response.json()
+        if data.get('response', {}).get('result') != 'success':
+            log(f"Tautulli API returned error: {data}", error=True)
+            return None
+        
+        # Find the session matching our rating_key
+        sessions = data.get('response', {}).get('data', {}).get('sessions', [])
+        for session in sessions:
+            if str(session.get('rating_key')) == str(rating_key):
+                log(f"Found matching session: progress={session.get('progress_percent')}%, session_id={session.get('session_id')}")
+                return {
+                    'progress': float(session.get('progress_percent', 0)),
+                    'session_id': session.get('session_id', ''),
+                    'duration': session.get('duration', 0)
+                }
+        
+        log(f"No active session found for rating_key {rating_key}", error=True)
+        return None
+        
+    except Exception as e:
+        log(f"Error fetching from Tautulli API: {e}", error=True)
+        return None
+
 def log(message, error=False):
     """Print log message for Tautulli logging"""
     if VERBOSE_LOGGING or error:
         output = sys.stderr if error else sys.stdout
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         output.write(f"[{timestamp}] [Trakt Scrobbler] {message}\n")
+
+def normalize_progress(progress):
+    """
+    Normalize progress to be within valid range for Trakt API
+    - Progress must be between 0-100
+    - For pause, progress must be >= 1.0
+    - Progress > 100 indicates episode transition (Tautulli quirk)
+    """
+    progress = float(progress)
+    
+    # Progress > 100% means new episode just started (Tautulli quirk)
+    if progress > 100:
+        log(f"Progress {progress}% exceeds 100%, resetting to 0% (new episode started)")
+        progress = 0.0
+    
+    # Floor at 0%
+    if progress < 0:
+        log(f"Progress {progress}% is negative, setting to 0%")
+        progress = 0.0
+    
+    return progress
 
 def load_tokens():
     """Load access tokens from file"""
@@ -196,7 +271,7 @@ def get_valid_token():
     
     return tokens.get('access_token')
 
-def make_trakt_request(endpoint, method='GET', data=None):
+def make_trakt_request(endpoint, method='GET', data=None, ignore_409=False):
     """Make authenticated request to Trakt API"""
     access_token = get_valid_token()
     if not access_token:
@@ -225,66 +300,72 @@ def make_trakt_request(endpoint, method='GET', data=None):
         
         log(f"Response status: {response.status_code}")
         log(f"Response headers: {dict(response.headers)}")
+        log(f"Response body: {response.text}")
         
-        if response.text:
-            log(f"Response body: {response.text}")
+        # Handle 409 Conflict - item already scrobbled/watched
+        if response.status_code == 409:
+            if ignore_409:
+                log("409 Conflict ignored (item already scrobbled)")
+                return {"ignored": True, "status": 409}
+            else:
+                log(f"Trakt API error: {response.status_code} {response.text}", error=True)
+                return None
         
-        if response.status_code == 204:  # No content (success for some endpoints)
-            log("API call successful (204 No Content)")
-            return {}
-        elif response.status_code == 200 or response.status_code == 201:
-            result = response.json()
-            log(f"API call successful: {result}")
-            return result
-        else:
-            log(f"Trakt API error: {response.status_code} {response.text}", error=True)
-            return None
+        # Handle successful responses
+        if response.status_code in [200, 201, 204]:
+            if response.text:
+                result = response.json()
+                log(f"API call successful: {result}")
+                return result
+            else:
+                log("API call successful (no content)")
+                return {"success": True}
+        
+        # Handle error responses
+        log(f"Trakt API error: {response.status_code} {response.text}", error=True)
+        return None
+            
+    except requests.RequestException as e:
+        log(f"Request error: {e}", error=True)
+        return None
+    except json.JSONDecodeError as e:
+        log(f"JSON decode error: {e}", error=True)
+        return None
     except Exception as e:
-        log(f"Error making Trakt request: {e}", error=True)
+        log(f"Unexpected error: {e}", error=True)
         return None
 
-def build_media_object(title, year, tmdb_id=None, imdb_id=None, tvdb_id=None, 
+def safe_int(value):
+    """Safely convert value to int"""
+    if value is None or value == '{tmdb_id}' or value == '{thetvdb_id}':
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+def safe_str(value):
+    """Safely convert value to string"""
+    if value is None or value == '{imdb_id}':
+        return None
+    return str(value).strip()
+
+def build_media_object(title, year, tmdb_id=None, imdb_id=None, tvdb_id=None,
                       show_name=None, season_num=None, episode_num=None):
     """Build media object for Trakt API"""
+    media_object = {}
     
-    def safe_int(value):
-        """Safely convert to int, return None if invalid"""
-        if not value or str(value).strip() == '' or str(value).startswith('{'):
-            return None
-        try:
-            val = int(str(value).strip())
-            return val if val > 0 else None
-        except (ValueError, TypeError):
-            return None
-    
-    def safe_str(value):
-        """Safely get string value, return None if invalid"""
-        if not value or str(value).strip() == '' or str(value).startswith('{'):
-            return None
-        return str(value).strip()
-    
-    if show_name and season_num and episode_num:
+    if show_name and season_num is not None and episode_num is not None:
         # TV Episode
-        media_object = {
-            "show": {
-                "title": show_name,
-                "ids": {}
-            },
-            "episode": {
-                "season": int(season_num),
-                "number": int(episode_num)
-            }
+        media_object["show"] = {
+            "title": show_name,
+            "ids": {}
         }
         
-        # Add year if valid
-        if year and year > 1900:
+        if year:
             media_object["show"]["year"] = year
         
         # Add show IDs
-        tmdb_val = safe_int(tmdb_id)
-        if tmdb_val:
-            media_object["show"]["ids"]["tmdb"] = tmdb_val
-            
         tvdb_val = safe_int(tvdb_id)
         if tvdb_val:
             media_object["show"]["ids"]["tvdb"] = tvdb_val
@@ -292,18 +373,19 @@ def build_media_object(title, year, tmdb_id=None, imdb_id=None, tvdb_id=None,
         imdb_val = safe_str(imdb_id)
         if imdb_val:
             media_object["show"]["ids"]["imdb"] = imdb_val
-            
+        
+        media_object["episode"] = {
+            "season": season_num,
+            "number": episode_num
+        }
     else:
         # Movie
-        media_object = {
-            "movie": {
-                "title": title,
-                "ids": {}
-            }
+        media_object["movie"] = {
+            "title": title,
+            "ids": {}
         }
         
-        # Add year if valid
-        if year and year > 1900:
+        if year:
             media_object["movie"]["year"] = year
         
         # Add movie IDs
@@ -318,13 +400,33 @@ def build_media_object(title, year, tmdb_id=None, imdb_id=None, tvdb_id=None,
     return media_object
 
 def scrobble_start(title, year, progress, tmdb_id=None, imdb_id=None, tvdb_id=None,
-                  show_name=None, season_num=None, episode_num=None):
+                  show_name=None, season_num=None, episode_num=None, session_id=None, rating_key=None):
     """Scrobble start watching"""
+    
+    # If session_id is empty, wait and fetch fresh data from Tautulli
+    if not session_id or session_id == '':
+        log("session_id is empty, waiting 3 seconds for Tautulli to update session...")
+        time.sleep(3)
+        
+        if rating_key:
+            session_data = get_session_from_tautulli(rating_key)
+            if session_data:
+                progress = session_data['progress']
+                session_id = session_data['session_id']
+                log(f"Fetched fresh data from Tautulli: progress={progress}%, session_id={session_id}")
+            else:
+                log("Failed to fetch session data, using original values", error=True)
+        else:
+            log("No rating_key provided, cannot fetch from Tautulli API", error=True)
+    
+    # Normalize progress
+    progress = normalize_progress(progress)
+    
     media_object = build_media_object(title, year, tmdb_id, imdb_id, tvdb_id, 
                                     show_name, season_num, episode_num)
     
     data = {
-        "progress": float(progress),
+        "progress": progress,
         **media_object
     }
     
@@ -341,11 +443,19 @@ def scrobble_start(title, year, progress, tmdb_id=None, imdb_id=None, tvdb_id=No
 def scrobble_pause(title, year, progress, tmdb_id=None, imdb_id=None, tvdb_id=None,
                   show_name=None, season_num=None, episode_num=None):
     """Scrobble pause watching"""
+    # Normalize progress
+    progress = normalize_progress(progress)
+    
+    # Trakt requires progress >= 1.0 to pause
+    if progress < 1.0:
+        log(f"Progress {progress}% is below 1.0%, skipping pause (Trakt requirement)")
+        return True  # Return True to avoid error in Tautulli
+    
     media_object = build_media_object(title, year, tmdb_id, imdb_id, tvdb_id, 
                                     show_name, season_num, episode_num)
     
     data = {
-        "progress": float(progress),
+        "progress": progress,
         **media_object
     }
     
@@ -362,22 +472,30 @@ def scrobble_pause(title, year, progress, tmdb_id=None, imdb_id=None, tvdb_id=No
 def scrobble_stop(title, year, progress, tmdb_id=None, imdb_id=None, tvdb_id=None,
                  show_name=None, season_num=None, episode_num=None):
     """Scrobble stop watching"""
+    # Normalize progress
+    progress = normalize_progress(progress)
+    
     media_object = build_media_object(title, year, tmdb_id, imdb_id, tvdb_id, 
                                     show_name, season_num, episode_num)
     
     data = {
-        "progress": float(progress),
+        "progress": progress,
         **media_object
     }
     
     log(f"Scrobbling stop: {json.dumps(data, indent=2)}")
-    result = make_trakt_request('scrobble/stop', 'POST', data)
+    # Ignore 409 conflicts (already watched/scrobbled)
+    result = make_trakt_request('scrobble/stop', 'POST', data, ignore_409=True)
     
     if result:
-        log("Successfully scrobbled stop")
+        # Check if it was a 409 that we ignored
+        if result.get("ignored") and result.get("status") == 409:
+            log("Stop already processed (409 conflict ignored)")
+        else:
+            log("Successfully scrobbled stop")
         
         # If watched more than threshold, mark as watched
-        if float(progress) >= (WATCH_THRESHOLD * 100):
+        if progress >= (WATCH_THRESHOLD * 100):
             log(f"Progress {progress}% >= threshold {WATCH_THRESHOLD*100}%, marking as watched")
             return mark_as_watched(title, year, tmdb_id, imdb_id, tvdb_id, 
                                  show_name, season_num, episode_num)
@@ -474,6 +592,8 @@ def main():
     parser.add_argument('--tmdb_id', help='TMDb ID')
     parser.add_argument('--tvdb_id', help='TheTVDB ID')
     parser.add_argument('--imdb_id', help='IMDb ID')
+    parser.add_argument('--session_id', help='Tautulli session ID (unique per stream)')
+    parser.add_argument('--rating_key', help='Plex rating key (unique media identifier)')
     
     args = parser.parse_args()
     
@@ -502,7 +622,8 @@ def main():
             return scrobble_start(
                 args.title, args.year, args.progress,
                 args.tmdb_id, args.imdb_id, args.tvdb_id,
-                args.show_name, args.season_num, args.episode_num
+                args.show_name, args.season_num, args.episode_num,
+                args.session_id, args.rating_key
             )
         elif args.action == 'pause':
             return scrobble_pause(

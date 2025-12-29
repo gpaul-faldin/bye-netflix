@@ -303,8 +303,6 @@ class TraktWatchlistSync:
             )
             shows_response.raise_for_status()
             shows = shows_response.json()
-            
-            logger.info(f"Fetched {len(movies)} movies and {len(shows)} shows from Trakt watchlist")
             return movies + shows
             
         except Exception as e:
@@ -587,8 +585,6 @@ class TraktWatchlistSync:
                 else:
                     logger.debug(f"Show already exists in Sonarr: {title}")
                     processed['skipped'] += 1
-        
-        logger.info(f"Processing complete: {processed['movies']} movies, {processed['shows']} shows added, {processed['skipped']} skipped")
     
     def run(self):
         """Main loop"""
@@ -597,10 +593,7 @@ class TraktWatchlistSync:
         
         while True:
             try:
-                logger.info("=" * 50)
-                logger.info(f"Checking Trakt watchlist - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 self.process_watchlist()
-                logger.info(f"Next check in {self.poll_interval} seconds")
                 time.sleep(self.poll_interval)
             except KeyboardInterrupt:
                 logger.info("Shutting down...")

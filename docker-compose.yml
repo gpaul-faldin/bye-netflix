@@ -21,7 +21,14 @@ services:
     ports:
       - "32400:32400"
     networks:
-      - media-network
+      media-network:
+      plex-lan:
+        ipv4_address: 192.168.1.152
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # VPN Container for Deluge
@@ -53,6 +60,11 @@ services:
       - "28605:28605/udp"  # Replace with your forwarded port
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Torrent Client (through VPN)
@@ -71,6 +83,53 @@ services:
       - /mnt/racing-ssd:/race
     depends_on:
       - gluetun
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Usenet Download Client
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+    volumes:
+      - ./config/sabnzbd:/config
+      - /srv:/srv  # Same path structure as your other services
+    ports:
+      - "8085:8080"  # Note: conflicts with your fetcharr port, change one of them
+    networks:
+      - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Watchdog to restart Deluge when WebUI becomes unreachable
+  gluetun-watchdog:
+    build:
+      context: ./gluetun-watchdog
+      dockerfile: Dockerfile
+    container_name: gluetun-watchdog
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - media-network
+    depends_on:
+      - gluetun
+      - deluge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   #YggTorrent indexer
@@ -89,6 +148,11 @@ services:
       - ./config/ygege/config.json:/app/config.json
     ports:
       - 8715:8715
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - media-network
 
@@ -108,6 +172,11 @@ services:
       - media-network
     depends_on:
       - ygege
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 
@@ -131,6 +200,11 @@ services:
     depends_on:
       - prowlarr
       - deluge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Tvshow Management
@@ -151,6 +225,11 @@ services:
     depends_on:
       - prowlarr
       - deluge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Bypass Cloudflare
@@ -166,6 +245,11 @@ services:
       - "8191:8191"
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Tautulli - Plex monitoring and statistics
@@ -183,6 +267,11 @@ services:
       - 8181:8181
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - plex
       - sonarr
@@ -205,6 +294,11 @@ services:
       - "8080:8080"
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - sonarr
       - radarr
@@ -225,6 +319,11 @@ services:
       - "6767:6767"
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - radarr
       - sonarr
@@ -253,6 +352,11 @@ services:
       - ./config/trakt-watchlist-sync:/config
     networks:
       - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - radarr
       - sonarr
@@ -278,76 +382,86 @@ services:
 
   #######################RACING#######################
 
-  # autobrr - IRC/RSS monitor for racing torrents
-  autobrr:
-    image: ghcr.io/autobrr/autobrr:latest
-    container_name: autobrr
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Europe/Paris
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        apk add --no-cache python3 py3-pip
-        pip3 install --break-system-packages requests
-        exec /usr/local/bin/autobrr --config /config
-    volumes:
-      - ./config/autobrr:/config
-    ports:
-      - "7474:7474"
-    networks:
-      - media-network
-    depends_on:
-      - deluge
-    restart: unless-stopped
+  # # autobrr - IRC/RSS monitor for racing torrents
+  # autobrr:
+  #   image: ghcr.io/autobrr/autobrr:latest
+  #   container_name: autobrr
+  #   environment:
+  #     - PUID=1000
+  #     - PGID=1000
+  #     - TZ=Europe/Paris
+  #   entrypoint: ["/bin/sh", "-c"]
+  #   command:
+  #     - |
+  #       apk add --no-cache python3 py3-pip
+  #       pip3 install --break-system-packages requests
+  #       exec /usr/local/bin/autobrr --config /config
+  #   volumes:
+  #     - ./config/autobrr:/config
+  #   ports:
+  #     - "7474:7474"
+  #   networks:
+  #     - media-network
+  #   depends_on:
+  #     - deluge
+  #   restart: unless-stopped
 
-  # Racing Supervisor - Per-Filter Slot Management
-  racing-supervisor:
-    build:
-      context: ./racing-supervisor
-      dockerfile: Dockerfile
-    container_name: racing-supervisor
-    environment:
-      - TZ=Europe/Paris
-      - RATIO_THRESHOLD=${RATIO_THRESHOLD:-1.6}
-      - TIME_THRESHOLD_DAYS=${TIME_THRESHOLD_DAYS:-7}
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
-      - MIN_UPLOAD_SPEED_KBS=${MIN_UPLOAD_SPEED_KBS:-100}
-      - DELUGE_HOST=gluetun
-      - DELUGE_PORT=58846
-      - DELUGE_USER=${DELUGE_USER:-faldin}
-      - DELUGE_PASSWORD=${DELUGE_PASSWORD:-faldin}
-      - AUTOBRR_URL=http://autobrr:7474
-      - AUTOBRR_API_KEY=${AUTOBRR_API_KEY}
-    volumes:
-    - ./racing-supervisor/supervisor.py:/app/supervisor.py:ro
-    networks:
-      - media-network
-    depends_on:
-      - deluge
-      - autobrr
-      - gluetun
-    restart: unless-stopped
+  # # Racing Supervisor - Per-Filter Slot Management
+  # racing-supervisor:
+  #   build:
+  #     context: ./racing-supervisor
+  #     dockerfile: Dockerfile
+  #   container_name: racing-supervisor
+  #   environment:
+  #     - TZ=Europe/Paris
+  #     - RATIO_THRESHOLD=${RATIO_THRESHOLD:-1.6}
+  #     - TIME_THRESHOLD_DAYS=${TIME_THRESHOLD_DAYS:-7}
+  #     - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
+  #     - MIN_UPLOAD_SPEED_KBS=${MIN_UPLOAD_SPEED_KBS:-100}
+  #     - DELUGE_HOST=gluetun
+  #     - DELUGE_PORT=58846
+  #     - DELUGE_USER=${DELUGE_USER:-faldin}
+  #     - DELUGE_PASSWORD=${DELUGE_PASSWORD:-faldin}
+  #     - AUTOBRR_URL=http://autobrr:7474
+  #     - AUTOBRR_API_KEY=${AUTOBRR_API_KEY}
+  #   volumes:
+  #   - ./racing-supervisor/supervisor.py:/app/supervisor.py:ro
+  #   networks:
+  #     - media-network
+  #   depends_on:
+  #     - deluge
+  #     - autobrr
+  #     - gluetun
+  #   restart: unless-stopped
 
-  ygg-rss-proxy:
-    image: python:3.11-alpine
-    container_name: ygg-rss-proxy
-    restart: unless-stopped
-    networks:
-      - media-network
-    volumes:
-      - ./config/autobrr/scripts/ygg_rss_authenticated.py:/app/proxy.py:ro
-    environment:
-      - YGG_USERNAME=XXXXXXX
-      - YGG_PASSWORD=XXXXXXX
-      - YGG_RSS_URL=https://www.yggtorrent.top/rss?action=generate&type=subcat&id=2189&passkey=yMT3y37H4PltdiX1mKxZAm01Ts9imKsL
-    ports:
-      - "8082:8080"
-    command: sh -c "pip install --no-cache-dir flask requests && python /app/proxy.py"
-    depends_on:
-      - flaresolverr
+  # ygg-rss-proxy:
+  #   image: python:3.11-alpine
+  #   container_name: ygg-rss-proxy
+  #   restart: unless-stopped
+  #   networks:
+  #     - media-network
+  #   volumes:
+  #     - ./config/autobrr/scripts/ygg_rss_authenticated.py:/app/proxy.py:ro
+  #   environment:
+  #     - YGG_USERNAME=$USERNAME_YGG
+  #     - YGG_PASSWORD=$PASSWORD_YGG
+  #     - YGG_RSS_URL=https://www.yggtorrent.top/rss?action=generate&type=subcat&id=2189&passkey=yMT3y37H4PltdiX1mKxZAm01Ts9imKsL
+  #   ports:
+  #     - "8082:8080"
+  #   command: sh -c "pip install --no-cache-dir flask requests && python /app/proxy.py"
+  #   depends_on:
+  #     - flaresolverr
 
 networks:
   media-network:
     driver: bridge
+
+  plex-lan:
+    driver: macvlan
+    driver_opts:
+      parent: enp0s31f6
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1
+          ip_range: 192.168.1.152/32

@@ -207,24 +207,39 @@ def ensure_series_monitored(series_id):
         sys.stderr.write(f"Failed to monitor series: {e}\n")
         return False
 
-def monitor_season(episodes, season_number):
-    """Monitor all episodes in a season"""
-    season_episodes = get_season_episodes(episodes, season_number)
-    episode_ids = [ep['id'] for ep in season_episodes if not ep.get('hasFile', False)]
+def monitor_season(series_id, season_number):
+    """Monitor an entire season at the series level"""
+    series = get_series(series_id)
+    if not series:
+        log(f"Could not get series {series_id}")
+        return False
     
-    if not episode_ids:
-        log(f"All episodes in season {season_number} already downloaded")
-        return True
+    log(f"Monitoring season {season_number} at series level...")
     
-    payload = {'episodeIds': episode_ids, 'monitored': True}
+    # Ensure series is monitored
+    series['monitored'] = True
+    
+    # Find and monitor the specific season
+    season_found = False
+    for season in series.get('seasons', []):
+        if int(season['seasonNumber']) == int(season_number):
+            season['monitored'] = True
+            season_found = True
+            log(f"Found season {season_number}, setting monitored=True")
+            break
+    
+    if not season_found:
+        log(f"Season {season_number} not found in series data")
+        return False
+    
     try:
-        r = requests.put(SONARR_URL.rstrip('/') + '/api/v3/episode/monitor',
-                        headers=get_headers(True), data=json.dumps(payload))
-        log(f"Monitored {len(episode_ids)} episodes in season {season_number}")
-        return r.json()
+        r = requests.put(SONARR_URL.rstrip('/') + '/api/v3/series/' + str(series_id),
+                        headers=get_headers(True), json=series)
+        log(f"✅ Season {season_number} now monitored at series level")
+        return True
     except Exception as e:
         sys.stderr.write(f"Sonarr API 'monitor_season' request failed: {e}\n")
-        return None
+        return False
 
 def monitor_all_seasons(series_id):
     """Enable monitoring for ALL seasons of a series"""
@@ -281,9 +296,9 @@ def download_full_season(series_id, episodes, season_number):
     if SET_WANTED:
         ensure_series_monitored(series_id)
         
-        # Then monitor the season so Sonarr will actually download
-        log(f"Setting season {season_number} as monitored...")
-        monitor_season(episodes, season_number)
+        # Monitor the ENTIRE season at series level (not individual episodes)
+        log(f"Setting season {season_number} as monitored at series level...")
+        monitor_season(series_id, season_number)
     
     # Trigger season search (more efficient than individual episode searches)
     if AUTO_SEARCH:

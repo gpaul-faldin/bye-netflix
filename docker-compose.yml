@@ -45,7 +45,7 @@ services:
       - VPN_TYPE=openvpn
       - OPENVPN_CUSTOM_CONFIG=/gluetun/AirVPN_Netherlands_UDP-443-Entry3.ovpn
       - TZ=Europe/Paris
-      - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16
+      - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16,172.19.0.0/16,192.168.1.0/24
       - FIREWALL_VPN_INPUT_PORTS=28605  # Replace with port from AirVPN website
       - PUID=1000
       - PGID=1000
@@ -103,6 +103,7 @@ services:
     volumes:
       - ./config/sabnzbd:/config
       - /srv:/srv  # Same path structure as your other services
+      - /mnt/racing-ssd:/race
     ports:
       - "8085:8080"  # Note: conflicts with your fetcharr port, change one of them
     networks:
@@ -199,6 +200,7 @@ services:
     volumes:
       - ./config/radarr:/config
       - /srv:/srv
+      - /mnt/racing-ssd:/race
     ports:
       - "7878:7878"
     networks:
@@ -224,6 +226,7 @@ services:
     volumes:
       - ./config/sonarr:/config
       - /srv:/srv
+      - /mnt/racing-ssd:/race
     ports:
       - "8989:8989"
     networks:
@@ -389,6 +392,28 @@ services:
       - media-network
     restart: unless-stopped
 
+  # SSD Cleanup Service - moves old downloads from SSD to HDD
+  ssd-cleanup:
+    build:
+      context: ./ssd-tiering
+      dockerfile: Dockerfile
+    container_name: ssd-cleanup
+    environment:
+      - TZ=Europe/Paris
+      - SSD_DOWNLOAD_PATH=/race/usenet
+      - CLEANUP_AGE_HOURS=6            # Delete files older than 6 hours
+      - SSD_SPACE_THRESHOLD=80         # Emergency cleanup at 80% full
+      - CLEANUP_INTERVAL=1800          # Check every 30 minutes
+    volumes:
+      - /mnt/racing-ssd:/race
+      - ./config/ssd-cleanup:/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
   #######################RACING#######################
 
   # # autobrr - IRC/RSS monitor for racing torrents
@@ -468,7 +493,7 @@ networks:
   plex-lan:
     driver: macvlan
     driver_opts:
-      parent: enp0s31f6
+      parent: enp3s0
     ipam:
       config:
         - subnet: 192.168.1.0/24

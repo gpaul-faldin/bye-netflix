@@ -428,22 +428,25 @@ class TraktWatchlistSync:
                 logger.warning(f"Season 1 not found for show: {title}")
                 return False
             
-            season_1_episode_count = season_1.get('statistics', {}).get('totalEpisodeCount', 0)
+            # Check if Season 1 is marked as available (ended)
+            show_status = sonarr_show.get('status', '').lower()
+            season_1_episode_count = season_1.get('statistics', {}).get('episodeCount', 0)
             
-            # Determine strategy based on Season 1 availability
+            # Determine strategy: download full season if it has episodes
+            # (episodeCount shows total episodes that will exist in the season)
             if season_1_episode_count > 0:
                 logger.info(f"Season 1 has {season_1_episode_count} episodes - will download full season")
                 download_full_season = True
             else:
-                logger.info(f"Season 1 not fully available yet - will download first 3 episodes only")
+                logger.info(f"Season 1 episode count unavailable - will download first 3 episodes only")
                 download_full_season = False
             
-            # Configure seasons
+            # Configure seasons - Monitor Season 1 ALWAYS for downloads to work
             for season in seasons:
                 if season.get('seasonNumber') == 1:
-                    season['monitored'] = True if download_full_season else False
+                    season['monitored'] = True  # MUST be monitored
                 else:
-                    season['monitored'] = False
+                    season['monitored'] = False  # Don't monitor other seasons
             
             # Prepare payload
             payload = {
@@ -457,7 +460,7 @@ class TraktWatchlistSync:
                 'monitored': True,  # Series must be monitored
                 'seasonFolder': True,
                 'addOptions': {
-                    'searchForMissingEpisodes': download_full_season  # Only search if full season
+                    'searchForMissingEpisodes': True  # ALWAYS trigger search immediately
                 }
             }
             
@@ -473,15 +476,12 @@ class TraktWatchlistSync:
             # Get series ID
             series_id = result.get('id')
             
-            if series_id:
-                if download_full_season:
-                    # Trigger full season search
-                    logger.info(f"Triggering full Season 1 search for {title}")
-                    self._search_full_season(series_id, 1)
-                else:
-                    # Fallback: Download only first 3 episodes
-                    logger.info(f"Triggering download for first 3 episodes of {title}")
-                    self._search_first_episodes(series_id, 1, 3)
+            # Note: searchForMissingEpisodes in addOptions should handle the search,
+            # but we can trigger additional searches if needed
+            if series_id and not download_full_season:
+                # For shows without full season info, also trigger manual episode search
+                logger.info(f"Triggering additional episode search for {title}")
+                self._search_first_episodes(series_id, 1, 3)
             
             logger.info(f"✅ Added show to Sonarr: {title}")
             return True

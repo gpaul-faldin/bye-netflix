@@ -18,6 +18,7 @@ services:
     volumes:
       - ./config/plex:/config
       - /srv:/srv
+      - /mnt/storage:/storage
     ports:
       - "32400:32400"
     networks:
@@ -82,6 +83,7 @@ services:
     volumes:
       - ./config/deluge:/config
       - /srv:/srv
+      - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
     depends_on:
       - gluetun
@@ -103,11 +105,15 @@ services:
     volumes:
       - ./config/sabnzbd:/config
       - /srv:/srv  # Same path structure as your other services
+      - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
     ports:
       - "8085:8080"  # Note: conflicts with your fetcharr port, change one of them
     networks:
       - media-network
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     logging:
       driver: "json-file"
       options:
@@ -200,6 +206,7 @@ services:
     volumes:
       - ./config/radarr:/config
       - /srv:/srv
+      - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
     ports:
       - "7878:7878"
@@ -226,6 +233,7 @@ services:
     volumes:
       - ./config/sonarr:/config
       - /srv:/srv
+      - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
     ports:
       - "8989:8989"
@@ -327,6 +335,7 @@ services:
     volumes:
       - ./config/bazarr:/config
       - /srv:/srv
+      - /mnt/storage:/storage
     ports:
       - "6767:6767"
     networks:
@@ -493,7 +502,7 @@ networks:
   plex-lan:
     driver: macvlan
     driver_opts:
-      parent: enp3s0
+      parent: enp5s0
     ipam:
       config:
         - subnet: 192.168.1.0/24

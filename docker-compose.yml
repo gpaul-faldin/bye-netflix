@@ -102,18 +102,17 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Europe/Paris
+      - HAS_IPV6=false
     volumes:
       - ./config/sabnzbd:/config
       - /srv:/srv  # Same path structure as your other services
       - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
+      - /home/servi7/sabnzbd:/home/servi7/sabnzbd
     ports:
       - "8085:8080"  # Note: conflicts with your fetcharr port, change one of them
     networks:
       - media-network
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1
-      - net.ipv6.conf.default.disable_ipv6=1
     logging:
       driver: "json-file"
       options:
@@ -208,6 +207,7 @@ services:
       - /srv:/srv
       - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
+      - /home/servi7/sabnzbd:/home/servi7/sabnzbd
     ports:
       - "7878:7878"
     networks:
@@ -235,6 +235,7 @@ services:
       - /srv:/srv
       - /mnt/storage:/storage
       - /mnt/racing-ssd:/race
+      - /home/servi7/sabnzbd:/home/servi7/sabnzbd
     ports:
       - "8989:8989"
     networks:
@@ -506,5 +507,5 @@ networks:
     ipam:
       config:
         - subnet: 192.168.1.0/24
-          gateway: 192.168.1.1
+          gateway: 192.168.1.254
           ip_range: 192.168.1.152/32

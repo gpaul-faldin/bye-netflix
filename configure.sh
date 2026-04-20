@@ -87,10 +87,23 @@ wait_for_http() {
 xml_key() { grep -oP "(?<=<ApiKey>)[^<]+" "$1" 2>/dev/null || true; }
 
 arr_get()  { curl -s -H "X-Api-Key: $2" "$1"; }
-arr_post() { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3" "$1"; }
+# ?forceSave=true skips the live connection test — works for /downloadclient, not /applications
+arr_post()      { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3" "${1}?forceSave=true"; }
+arr_post_plain() { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3" "$1"; }
 
 # Check if a name already exists in a JSON array response
 already_exists() { echo "$1" | grep -q "\"name\":\"$2\""; }
+
+# Probe which container URL Radarr can actually use to reach a service
+probe_url_from_radarr() {
+  local candidates=("$@")
+  for url in "${candidates[@]}"; do
+    if docker exec radarr wget --timeout=3 --tries=1 -qO/dev/null "$url" 2>/dev/null; then
+      echo "$url"; return 0
+    fi
+  done
+  echo ""
+}
 
 # ─── Step 1: Extract API keys ─────────────────────────────────────────────────
 header "Extracting API keys from config files"
@@ -134,7 +147,8 @@ update_env "SONARR_API_KEY" "$SONARR_KEY"
 # Extract Tautulli API key for reference (used in scripts)
 TAUTULLI_INI="${SCRIPT_DIR}/config/tautulli/config/config.ini"
 if [[ -f "$TAUTULLI_INI" ]]; then
-  TAUTULLI_KEY=$(grep -A30 '^\[General\]' "$TAUTULLI_INI" | grep 'api_key' | head -1 | cut -d'=' -f2 | tr -d ' ' || true)
+  TAUTULLI_KEY=$(grep -A30 '^\[General\]' "$TAUTULLI_INI" | grep 'api_key' | head -1 \
+    | cut -d'=' -f2 | tr -d ' "' || true)
   if [[ -n "$TAUTULLI_KEY" ]]; then
     update_env "TAUTULLI_API_KEY" "$TAUTULLI_KEY"
     ok "Tautulli API key: ${TAUTULLI_KEY:0:8}... (saved to .env)"
@@ -178,6 +192,21 @@ fi
 # ─── Step 5: Connect Prowlarr → Radarr + Sonarr ───────────────────────────────
 header "Connecting Prowlarr to Radarr and Sonarr"
 
+# Probe which URL Radarr can actually use to reach Prowlarr.
+# When VPN is on, Prowlarr shares gluetun's network stack.
+echo -n "  Probing Prowlarr URL from Radarr container..."
+PROWLARR_CONTAINER_URL=$(probe_url_from_radarr \
+  "http://gluetun:9696/api/v1/system/status" \
+  "http://prowlarr:9696/api/v1/system/status")
+# Strip the path — we only need the base URL
+PROWLARR_CONTAINER_URL="${PROWLARR_CONTAINER_URL%/api*}"
+if [[ -n "$PROWLARR_CONTAINER_URL" ]]; then
+  ok "Prowlarr reachable from Radarr at ${PROWLARR_CONTAINER_URL}"
+else
+  PROWLARR_CONTAINER_URL=$($USE_VPN && echo "http://gluetun:9696" || echo "http://prowlarr:9696")
+  warn "Could not probe — defaulting to ${PROWLARR_CONTAINER_URL}"
+fi
+
 existing_apps=$(arr_get "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY")
 
 if already_exists "$existing_apps" "Radarr"; then
@@ -191,7 +220,7 @@ else
   "implementation": "Radarr",
   "configContract": "RadarrSettings",
   "fields": [
-    {"name": "prowlarrUrl",             "value": "http://prowlarr:9696"},
+    {"name": "prowlarrUrl",             "value": "${PROWLARR_CONTAINER_URL}"},
     {"name": "baseUrl",                 "value": "http://radarr:7878"},
     {"name": "apiKey",                  "value": "${RADARR_KEY}"},
     {"name": "syncCategories",          "value": [2000,2010,2020,2030,2040,2045,2050,2060,2070,2080]},
@@ -202,7 +231,7 @@ else
 }
 JSON
 )
-  result=$(arr_post "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
+  result=$(arr_post_plain "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
   echo "$result" | grep -q '"id"' && { ok "Prowlarr → Radarr connected"; todo_done "prowlarr-radarr"; } \
     || warn "Prowlarr → Radarr may have failed: $(echo "$result" | head -c 200)"
 fi
@@ -218,7 +247,7 @@ else
   "implementation": "Sonarr",
   "configContract": "SonarrSettings",
   "fields": [
-    {"name": "prowlarrUrl",             "value": "http://prowlarr:9696"},
+    {"name": "prowlarrUrl",             "value": "${PROWLARR_CONTAINER_URL}"},
     {"name": "baseUrl",                 "value": "http://sonarr:8989"},
     {"name": "apiKey",                  "value": "${SONARR_KEY}"},
     {"name": "syncCategories",          "value": [5000,5010,5020,5030,5040,5045,5050,5060,5070,5080]},
@@ -234,28 +263,130 @@ JSON
     || warn "Prowlarr → Sonarr may have failed: $(echo "$result" | head -c 200)"
 fi
 
-# ─── Step 6: Download clients ─────────────────────────────────────────────────
+# ─── Step 6: Add download clients to Prowlarr ────────────────────────────────
+# Prowlarr needs download clients configured so it can relay grabs when needed.
+if $USE_TORRENT || $USE_USENET; then
+  header "Adding download clients to Prowlarr"
+
+  existing_prowlarr_clients=$(arr_get "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY")
+
+  if $USE_TORRENT; then
+    DELUGE_HOST_P=$($USE_VPN && echo "gluetun" || echo "deluge")
+    if already_exists "$existing_prowlarr_clients" "Deluge"; then
+      skip "Deluge already in Prowlarr"
+    else
+      payload=$(cat <<JSON
+{
+  "enable": true,
+  "protocol": "torrent",
+  "priority": 1,
+  "name": "Deluge",
+  "fields": [
+    {"name": "host",      "value": "${DELUGE_HOST_P}"},
+    {"name": "port",      "value": 58846},
+    {"name": "password",  "value": "${DELUGE_PASSWORD:-changeme}"},
+    {"name": "category",  "value": ""},
+    {"name": "addPaused", "value": false},
+    {"name": "useSsl",    "value": false}
+  ],
+  "implementationName": "Deluge",
+  "implementation": "Deluge",
+  "configContract": "DelugeSettings",
+  "tags": []
+}
+JSON
+)
+      result=$(arr_post "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY" "$payload")
+      echo "$result" | grep -q '"id"' && ok "Deluge → Prowlarr" \
+        || warn "Deluge → Prowlarr may have failed: $(echo "$result" | head -c 200)"
+    fi
+  fi
+
+  if $USE_USENET; then
+    SABNZBD_INI_P="${SCRIPT_DIR}/config/sabnzbd/sabnzbd.ini"
+    SABNZBD_KEY_P=""
+    [[ -f "$SABNZBD_INI_P" ]] && SABNZBD_KEY_P=$(grep '^api_key' "$SABNZBD_INI_P" | head -1 \
+      | cut -d'=' -f2 | tr -d ' "' || true)
+
+    if already_exists "$existing_prowlarr_clients" "SABnzbd"; then
+      skip "SABnzbd already in Prowlarr"
+    elif [[ -z "$SABNZBD_KEY_P" ]]; then
+      warn "SABnzbd config not ready yet — skipping Prowlarr"
+    else
+      payload=$(cat <<JSON
+{
+  "enable": true,
+  "protocol": "usenet",
+  "priority": 1,
+  "name": "SABnzbd",
+  "fields": [
+    {"name": "host",   "value": "sabnzbd"},
+    {"name": "port",   "value": 8080},
+    {"name": "apiKey", "value": "${SABNZBD_KEY_P}"},
+    {"name": "useSsl", "value": false}
+  ],
+  "implementationName": "Sabnzbd",
+  "implementation": "Sabnzbd",
+  "configContract": "SabnzbdSettings",
+  "tags": []
+}
+JSON
+)
+      result=$(arr_post "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY" "$payload")
+      echo "$result" | grep -q '"id"' && ok "SABnzbd → Prowlarr" \
+        || warn "SABnzbd → Prowlarr may have failed: $(echo "$result" | head -c 200)"
+    fi
+  fi
+fi
+
+# ─── Step 7: Add download clients to Radarr + Sonarr ─────────────────────────
 if $USE_TORRENT; then
-  header "Adding Deluge download client"
+  header "Enabling Deluge Labels plugin"
 
   DELUGE_HOST=$($USE_VPN && echo "gluetun" || echo "deluge")
   DELUGE_PASS="${DELUGE_PASSWORD:-changeme}"
+  DELUGE_WEB="http://localhost:8112"  # Deluge WebUI (host perspective)
+  DELUGE_COOKIE="/tmp/deluge_cfg_$$.txt"
+
+  # Login to Deluge WebUI (JSON-RPC)
+  login_resp=$(curl -s -c "$DELUGE_COOKIE" \
+    -H "Content-Type: application/json" \
+    -d "{\"method\":\"auth.login\",\"params\":[\"${DELUGE_PASS}\"],\"id\":1}" \
+    "${DELUGE_WEB}/json" 2>/dev/null || true)
+
+  if echo "$login_resp" | grep -q '"result": true'; then
+    # Enable Labels plugin
+    curl -s -b "$DELUGE_COOKIE" -c "$DELUGE_COOKIE" \
+      -H "Content-Type: application/json" \
+      -d '{"method":"core.enable_plugin","params":["Label"],"id":2}' \
+      "${DELUGE_WEB}/json" >/dev/null
+
+    sleep 2  # give the plugin a moment to load
+
+    # Create radarr and sonarr labels
+    for lbl in radarr sonarr; do
+      curl -s -b "$DELUGE_COOKIE" \
+        -H "Content-Type: application/json" \
+        -d "{\"method\":\"label.add\",\"params\":[\"${lbl}\"],\"id\":3}" \
+        "${DELUGE_WEB}/json" >/dev/null
+    done
+    ok "Deluge Labels plugin enabled, labels created: radarr, sonarr"
+  else
+    warn "Could not log in to Deluge WebUI — Labels plugin not configured (check DELUGE_PASSWORD in .env)"
+  fi
+  rm -f "$DELUGE_COOKIE"
+
+  header "Adding Deluge download client"
 
   for ARR in radarr sonarr; do
     BASE=$( [[ "$ARR" == "radarr" ]] && echo "$RADARR_BASE" || echo "$SONARR_BASE" )
     KEY=$(  [[ "$ARR" == "radarr" ]] && echo "$RADARR_KEY"  || echo "$SONARR_KEY"  )
-    LABEL=$(echo "$ARR" | sed 's/./\u&/')
+    LABEL_CAP=$(echo "$ARR" | sed 's/./\u&/')
 
     existing_clients=$(arr_get "${BASE}/api/v3/downloadclient" "$KEY")
     if already_exists "$existing_clients" "Deluge"; then
-      skip "Deluge already configured in ${LABEL}"
+      skip "Deluge already configured in ${LABEL_CAP}"
       continue
-    fi
-
-    if [[ "$ARR" == "radarr" ]]; then
-      PRIORITY_FIELDS='"recentMoviePriority":0,"olderMoviePriority":0'
-    else
-      PRIORITY_FIELDS='"recentEpisodePriority":0,"olderEpisodePriority":0'
     fi
 
     payload=$(cat <<JSON
@@ -266,9 +397,9 @@ if $USE_TORRENT; then
   "name": "Deluge",
   "fields": [
     {"name": "host",                   "value": "${DELUGE_HOST}"},
-    {"name": "port",                   "value": 58846},
+    {"name": "port",                   "value": 8112},
     {"name": "password",               "value": "${DELUGE_PASS}"},
-    {"name": "category",               "value": ""},
+    {"name": "category",               "value": "${ARR}"},
     {"name": "recentMoviePriority",    "value": 0},
     {"name": "olderMoviePriority",     "value": 0},
     {"name": "recentEpisodePriority",  "value": 0},
@@ -285,8 +416,8 @@ JSON
 )
     result=$(arr_post "${BASE}/api/v3/downloadclient" "$KEY" "$payload")
     echo "$result" | grep -q '"id"' \
-      && { ok "Deluge → ${LABEL} (host: ${DELUGE_HOST}:58846)"; todo_done "${ARR}-deluge"; } \
-      || warn "Deluge → ${LABEL} may have failed: $(echo "$result" | head -c 200)"
+      && { ok "Deluge → ${LABEL_CAP} (host: ${DELUGE_HOST}:8112, label: ${ARR})"; todo_done "${ARR}-deluge"; } \
+      || warn "Deluge → ${LABEL_CAP} may have failed: $(echo "$result" | head -c 200)"
   done
 fi
 
@@ -297,7 +428,21 @@ if $USE_USENET; then
   if [[ ! -f "$SABNZBD_INI" ]]; then
     warn "SABnzbd config not found — is SABnzbd running? Skipping."
   else
-    SABNZBD_KEY=$(grep '^api_key' "$SABNZBD_INI" | head -1 | cut -d'=' -f2 | tr -d ' ' || true)
+    # SABnzbd rejects connections whose Host header isn't whitelisted.
+    # Patch the INI to allow the 'sabnzbd' Docker hostname, then restart.
+    if ! grep -q 'host_whitelist' "$SABNZBD_INI" || \
+       ! grep 'host_whitelist' "$SABNZBD_INI" | grep -q 'sabnzbd'; then
+      if grep -q '^host_whitelist' "$SABNZBD_INI"; then
+        sed -i "s|^host_whitelist\s*=.*|host_whitelist = sabnzbd, localhost|" "$SABNZBD_INI"
+      else
+        sed -i "/^\[misc\]/a host_whitelist = sabnzbd, localhost" "$SABNZBD_INI"
+      fi
+      ok "SABnzbd host_whitelist patched — restarting SABnzbd..."
+      docker restart sabnzbd >/dev/null
+      sleep 8
+    fi
+
+    SABNZBD_KEY=$(grep '^api_key' "$SABNZBD_INI" | head -1 | cut -d'=' -f2 | tr -d ' "' || true)
     if [[ -z "$SABNZBD_KEY" ]]; then
       warn "Could not read SABnzbd API key from sabnzbd.ini — skipping"
     else

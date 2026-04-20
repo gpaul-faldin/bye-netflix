@@ -96,16 +96,21 @@ See [SETUP.md](SETUP.md) for installation instructions.
 
 ## Storage
 
-All paths are configured in `.env` and work whether you have one drive or many:
+Two configurations, both set in `.env`:
 
-| Variable | Container path | Purpose |
-|---|---|---|
-| `MEDIA_DIR` | `/media` | Primary media library |
-| `STORAGE_DIR` | `/storage` | Secondary / overflow storage (default: same as MEDIA_DIR) |
-| `SSD_DIR` | `/race` | Fast download cache (default: same as MEDIA_DIR) |
-| `DOWNLOADS_DIR` | `/downloads` | Completed downloads staging for import |
+**Single drive** — downloads and library share one drive:
+```
+MEDIA_DIR=/srv/media        → /media  (library — Radarr/Sonarr root folders point here)
+DOWNLOADS_DIR=/srv/downloads → /downloads  (download client drops files here)
+```
+Radarr/Sonarr hardlink on import — instant, zero copy overhead.
 
-If you only have one drive, set all four to the same path. Setup.sh handles this automatically.
+**SSD + HDD** — fast downloads, large library:
+```
+MEDIA_DIR=/mnt/hdd/media    → /media
+DOWNLOADS_DIR=/mnt/ssd      → /downloads
+```
+Radarr/Sonarr copy on import (cross-filesystem). The SSD is purely a staging area — once imported, files live on the HDD.
 
 ---
 

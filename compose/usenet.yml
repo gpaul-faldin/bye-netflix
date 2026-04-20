@@ -16,9 +16,6 @@ services:
       - HAS_IPV6=false
     volumes:
       - ./config/sabnzbd:/config
-      - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
-      - ${SSD_DIR:-${MEDIA_DIR}}:/race
       - ${DOWNLOADS_DIR}:/downloads
     ports:
       - "8085:8080"

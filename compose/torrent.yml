@@ -19,9 +19,7 @@ services:
       - DELUGE_LOGLEVEL=error
     volumes:
       - ./config/deluge:/config
-      - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
-      - ${SSD_DIR:-${MEDIA_DIR}}:/race
+      - ${DOWNLOADS_DIR}:/downloads
     ports:
       - "8112:8112"   # WebUI
       - "58846:58846" # Daemon (used by Radarr/Sonarr)

@@ -24,7 +24,6 @@ services:
     volumes:
       - ./config/plex:/config
       - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
     ports:
       - "32400:32400"
     networks:
@@ -46,8 +45,6 @@ services:
     volumes:
       - ./config/radarr:/config
       - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
-      - ${SSD_DIR:-${MEDIA_DIR}}:/race
       - ${DOWNLOADS_DIR}:/downloads
     ports:
       - "7878:7878"
@@ -68,8 +65,6 @@ services:
     volumes:
       - ./config/sonarr:/config
       - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
-      - ${SSD_DIR:-${MEDIA_DIR}}:/race
       - ${DOWNLOADS_DIR}:/downloads
     ports:
       - "8989:8989"
@@ -125,7 +120,6 @@ services:
     volumes:
       - ./config/bazarr:/config
       - ${MEDIA_DIR}:/media
-      - ${STORAGE_DIR:-${MEDIA_DIR}}:/storage
     ports:
       - "6767:6767"
     networks:

@@ -60,22 +60,22 @@ ok "Detected user IDs: PUID=$PUID PGID=$PGID"
 # ─── Storage ─────────────────────────────────────────────────────────────────
 header "Storage"
 
-echo "Most people have a single drive or folder for their media."
-echo "Advanced setups can separate primary library, overflow storage, and a fast download SSD."
+echo "Two supported configurations:"
+echo "  Single drive  — downloads and media library share the same drive"
+echo "  SSD + HDD     — downloads land on the SSD, Radarr/Sonarr import them to the HDD"
+echo ""
 
-MEDIA_DIR=$(prompt MEDIA_DIR "Primary media directory (movies/TV will live here)" "/srv/media")
+MEDIA_DIR=$(prompt MEDIA_DIR "Media library path (HDD — where movies/TV are stored)" "/srv/media")
 
-STORAGE_DIR="$MEDIA_DIR"
-if yes_no "Do you have a separate secondary storage drive (e.g. a large HDD for overflow)?"; then
-  STORAGE_DIR=$(prompt STORAGE_DIR "Secondary storage path" "/mnt/storage")
+DOWNLOADS_DIR="${MEDIA_DIR}/downloads"
+if yes_no "Do you have a separate SSD for downloads? (faster during active downloads)"; then
+  DOWNLOADS_DIR=$(prompt DOWNLOADS_DIR "Downloads path (SSD)" "/mnt/ssd/downloads")
+  echo ""
+  echo "  Note: Radarr/Sonarr will copy files from SSD → HDD on import."
+  echo "  (Hardlinks won't work across drives — this is expected.)"
+else
+  DOWNLOADS_DIR=$(prompt DOWNLOADS_DIR "Downloads directory" "${MEDIA_DIR}/downloads")
 fi
-
-SSD_DIR="$MEDIA_DIR"
-if yes_no "Do you have a fast SSD dedicated to active downloads (speeds up imports)?"; then
-  SSD_DIR=$(prompt SSD_DIR "SSD path" "/mnt/ssd")
-fi
-
-DOWNLOADS_DIR=$(prompt DOWNLOADS_DIR "Completed downloads staging directory" "${MEDIA_DIR}/downloads")
 
 # ─── Download method ─────────────────────────────────────────────────────────
 header "Download Method"
@@ -193,8 +193,6 @@ PGID=${PGID}
 
 # ─── Storage ─────────────────────────────────────────────────────────────────
 MEDIA_DIR=${MEDIA_DIR}
-STORAGE_DIR=${STORAGE_DIR}
-SSD_DIR=${SSD_DIR}
 DOWNLOADS_DIR=${DOWNLOADS_DIR}
 
 # ─── Plex ────────────────────────────────────────────────────────────────────
@@ -271,8 +269,6 @@ ok "Config directories created under ./config/"
 
 # ─── Create media directories ────────────────────────────────────────────────
 mkdir -p "${MEDIA_DIR}/movies" "${MEDIA_DIR}/tv" "${DOWNLOADS_DIR}"
-[[ "$STORAGE_DIR" != "$MEDIA_DIR" ]] && mkdir -p "${STORAGE_DIR}/movies" "${STORAGE_DIR}/tv"
-[[ "$SSD_DIR"     != "$MEDIA_DIR" ]] && mkdir -p "${SSD_DIR}"
 ok "Media directories created"
 
 # ─── Write TODO.md ───────────────────────────────────────────────────────────

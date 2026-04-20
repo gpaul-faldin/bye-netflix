@@ -60,8 +60,8 @@ TOKEN_FILE = './trakt_tokens.json'
 # File to store last scrobbled episode state
 STATE_FILE = './trakt_scrobbler_state.json'
 
-# Minimum watch percentage to mark as "watched" (80% = 0.8)
-WATCH_THRESHOLD = 0.8
+# Minimum watch percentage to mark as "watched" (90% = 0.9)
+WATCH_THRESHOLD = 0.9
 
 # Enable debug logging
 VERBOSE_LOGGING = True

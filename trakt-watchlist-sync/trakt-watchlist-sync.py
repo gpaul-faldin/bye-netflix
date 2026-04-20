@@ -391,7 +391,8 @@ class TraktWatchlistSync:
             return True
             
         except Exception as e:
-            logger.error(f"Error adding movie to Radarr: {e}")
+            body = getattr(getattr(e, 'response', None), 'text', 'no body')
+            logger.error(f"Error adding movie to Radarr: {e} | Response body: {body}")
             return False
     
     def add_show_to_sonarr(self, show_data: Dict) -> bool:

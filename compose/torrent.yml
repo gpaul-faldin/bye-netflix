@@ -10,7 +10,7 @@ version: '3.8'
 services:
 
   deluge:
-    image: lscr.io/linuxserver/deluge:latest
+    image: lscr.io/linuxserver/deluge:2.2.0-ls370
     container_name: deluge
     environment:
       - PUID=${PUID:-1000}

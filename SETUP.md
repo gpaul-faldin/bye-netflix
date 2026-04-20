@@ -62,55 +62,32 @@ Only needed on first run to link the server to your Plex account.
 
 ---
 
-## 4. Configure Prowlarr
+## 4. Run configure.sh
 
-1. Open http://localhost:9696
-2. Settings → Apps → Add Radarr (URL: `http://radarr:7878`, API key from step 5)
-3. Settings → Apps → Add Sonarr (URL: `http://sonarr:8989`, API key from step 5)
-4. Indexers → Add your indexers — they sync automatically to Radarr and Sonarr
+`configure.sh` automatically handles all of the following — no manual UI clicks needed:
 
----
+- Reads API keys from each service's config file
+- Updates `.env` with the discovered keys
+- Adds root folders to Radarr and Sonarr
+- Connects Prowlarr to Radarr and Sonarr
+- Adds Deluge and/or SABnzbd as download clients in both Radarr and Sonarr
+- Restarts Trakt containers with the correct API keys (if enabled)
 
-## 5. Get API keys and update .env
-
-After first run, grab API keys from each service:
-
-- Radarr: http://localhost:7878 → Settings → General → API Key
-- Sonarr: http://localhost:8989 → Settings → General → API Key
-
-Add them to `.env`:
-```
-RADARR_API_KEY=your_key_here
-SONARR_API_KEY=your_key_here
+```bash
+./configure.sh
 ```
 
-Restart: `./stop.sh && ./start.sh`
+It is safe to re-run — it checks for existing configuration before adding anything.
+
+After it runs, **the only thing left in Prowlarr** is adding indexers:
+
+1. Open http://localhost:9696 → Indexers → Add Indexer
+2. Add your torrent and/or usenet indexers
+3. They sync to Radarr and Sonarr automatically — nothing to configure there
 
 ---
 
-## 6. Configure download clients in Radarr & Sonarr
-
-**Deluge (torrents):**
-
-Settings → Download Clients → Add → Deluge
-- Host: `gluetun` (if using VPN) or `deluge` (if no VPN)
-- Port: `58846`
-- Password: value of `DELUGE_PASSWORD` in `.env`
-
-**SABnzbd (usenet):**
-
-Settings → Download Clients → Add → SABnzbd
-- Host: `sabnzbd`
-- Port: `8080`
-- API Key: get from http://localhost:8085 → Config → General
-
-**Root folders** (Settings → Media Management → Root Folders):
-- Radarr: `/media/movies` (or your `RADARR_ROOT_FOLDER` value)
-- Sonarr: `/media/tv` (or your `SONARR_ROOT_FOLDER` value)
-
----
-
-## 7. Authenticate Trakt (if enabled)
+## 5. Authenticate Trakt (if enabled)
 
 ```bash
 docker compose -f docker-compose.yml -f compose/trakt.yml \
@@ -133,7 +110,7 @@ In Sonarr → Settings → Connect → Add → Webhook:
 
 ---
 
-## 8. Tautulli scripts
+## 6. Tautulli scripts
 
 These scripts run inside Tautulli as notification agents.
 
@@ -193,7 +170,7 @@ Settings → Notification Agents → Add → Script
 
 ---
 
-## 9. Connect Tautulli to Plex
+## 7. Connect Tautulli to Plex
 
 Settings → Plex Media Server
 - Plex IP: `plex` (Docker DNS) or your macvlan LAN IP
@@ -202,7 +179,7 @@ Settings → Plex Media Server
 
 ---
 
-## 10. Configure Fetcharr
+## 8. Configure Fetcharr
 
 Fetcharr monitors your Plex watchlist and sends items to Radarr/Sonarr.
 
@@ -223,7 +200,7 @@ Fetcharr also needs a Plex token to read your watchlist — configure this in th
 
 ---
 
-## 11. Configure Bazarr
+## 9. Configure Bazarr
 
 http://localhost:6767
 

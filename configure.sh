@@ -258,123 +258,63 @@ else
 }
 JSON
 )
-  result=$(arr_post "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
+  result=$(arr_post_plain "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
   echo "$result" | grep -q '"id"' && { ok "Prowlarr → Sonarr connected"; todo_done "prowlarr-sonarr"; } \
     || warn "Prowlarr → Sonarr may have failed: $(echo "$result" | head -c 200)"
 fi
 
-# ─── Step 6: Add download clients to Prowlarr ────────────────────────────────
-# Prowlarr needs download clients configured so it can relay grabs when needed.
-if $USE_TORRENT || $USE_USENET; then
-  header "Adding download clients to Prowlarr"
-
-  existing_prowlarr_clients=$(arr_get "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY")
-
-  if $USE_TORRENT; then
-    DELUGE_HOST_P=$($USE_VPN && echo "gluetun" || echo "deluge")
-    if already_exists "$existing_prowlarr_clients" "Deluge"; then
-      skip "Deluge already in Prowlarr"
-    else
-      payload=$(cat <<JSON
-{
-  "enable": true,
-  "protocol": "torrent",
-  "priority": 1,
-  "name": "Deluge",
-  "fields": [
-    {"name": "host",      "value": "${DELUGE_HOST_P}"},
-    {"name": "port",      "value": 58846},
-    {"name": "password",  "value": "${DELUGE_PASSWORD:-changeme}"},
-    {"name": "category",  "value": ""},
-    {"name": "addPaused", "value": false},
-    {"name": "useSsl",    "value": false}
-  ],
-  "implementationName": "Deluge",
-  "implementation": "Deluge",
-  "configContract": "DelugeSettings",
-  "tags": []
-}
-JSON
-)
-      result=$(arr_post "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY" "$payload")
-      echo "$result" | grep -q '"id"' && ok "Deluge → Prowlarr" \
-        || warn "Deluge → Prowlarr may have failed: $(echo "$result" | head -c 200)"
-    fi
-  fi
-
-  if $USE_USENET; then
-    SABNZBD_INI_P="${SCRIPT_DIR}/config/sabnzbd/sabnzbd.ini"
-    SABNZBD_KEY_P=""
-    [[ -f "$SABNZBD_INI_P" ]] && SABNZBD_KEY_P=$(grep '^api_key' "$SABNZBD_INI_P" | head -1 \
-      | cut -d'=' -f2 | tr -d ' "' || true)
-
-    if already_exists "$existing_prowlarr_clients" "SABnzbd"; then
-      skip "SABnzbd already in Prowlarr"
-    elif [[ -z "$SABNZBD_KEY_P" ]]; then
-      warn "SABnzbd config not ready yet — skipping Prowlarr"
-    else
-      payload=$(cat <<JSON
-{
-  "enable": true,
-  "protocol": "usenet",
-  "priority": 1,
-  "name": "SABnzbd",
-  "fields": [
-    {"name": "host",   "value": "sabnzbd"},
-    {"name": "port",   "value": 8080},
-    {"name": "apiKey", "value": "${SABNZBD_KEY_P}"},
-    {"name": "useSsl", "value": false}
-  ],
-  "implementationName": "Sabnzbd",
-  "implementation": "Sabnzbd",
-  "configContract": "SabnzbdSettings",
-  "tags": []
-}
-JSON
-)
-      result=$(arr_post "${PROWLARR_BASE}/api/v1/downloadclient" "$PROWLARR_KEY" "$payload")
-      echo "$result" | grep -q '"id"' && ok "SABnzbd → Prowlarr" \
-        || warn "SABnzbd → Prowlarr may have failed: $(echo "$result" | head -c 200)"
-    fi
-  fi
-fi
-
-# ─── Step 7: Add download clients to Radarr + Sonarr ─────────────────────────
+# ─── Step 6: Add download clients to Radarr + Sonarr ─────────────────────────
 if $USE_TORRENT; then
   header "Enabling Deluge Labels plugin"
 
   DELUGE_HOST=$($USE_VPN && echo "gluetun" || echo "deluge")
   DELUGE_PASS="${DELUGE_PASSWORD:-changeme}"
-  DELUGE_WEB="http://localhost:8112"  # Deluge WebUI (host perspective)
-  DELUGE_COOKIE="/tmp/deluge_cfg_$$.txt"
 
-  # Login to Deluge WebUI (JSON-RPC)
-  login_resp=$(curl -s -c "$DELUGE_COOKIE" \
-    -H "Content-Type: application/json" \
-    -d "{\"method\":\"auth.login\",\"params\":[\"${DELUGE_PASS}\"],\"id\":1}" \
-    "${DELUGE_WEB}/json" 2>/dev/null || true)
+  # Full JSON-RPC flow: login → connect to daemon → enable plugin → create labels
+  deluge_result=$(python3 << PYEOF
+import json, http.cookiejar, urllib.request, urllib.error, time, sys
 
-  if echo "$login_resp" | grep -q '"result": true'; then
-    # Enable Labels plugin
-    curl -s -b "$DELUGE_COOKIE" -c "$DELUGE_COOKIE" \
-      -H "Content-Type: application/json" \
-      -d '{"method":"core.enable_plugin","params":["Label"],"id":2}' \
-      "${DELUGE_WEB}/json" >/dev/null
+DELUGE_URL = "http://localhost:8112"
+PASS = """${DELUGE_PASS}"""
 
-    sleep 2  # give the plugin a moment to load
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
-    # Create radarr and sonarr labels
-    for lbl in radarr sonarr; do
-      curl -s -b "$DELUGE_COOKIE" \
-        -H "Content-Type: application/json" \
-        -d "{\"method\":\"label.add\",\"params\":[\"${lbl}\"],\"id\":3}" \
-        "${DELUGE_WEB}/json" >/dev/null
-    done
+def rpc(method, params, req_id):
+    data = json.dumps({"method": method, "params": params, "id": req_id}).encode()
+    req = urllib.request.Request(
+        f"{DELUGE_URL}/json", data=data,
+        headers={"Content-Type": "application/json"})
+    return json.loads(opener.open(req).read())
+
+try:
+    r = rpc("auth.login", [PASS], 1)
+    if not r.get("result"):
+        print("LOGIN_FAILED"); sys.exit(1)
+
+    hosts = rpc("web.get_hosts", [], 2).get("result", [])
+    if hosts:
+        rpc("web.connect", [hosts[0][0]], 3)
+        time.sleep(2)
+
+    rpc("core.enable_plugin", ["Label"], 4)
+    rpc("web.enable_plugin", ["Label"], 5)
+    time.sleep(3)
+
+    for i, lbl in enumerate(["radarr", "sonarr"], start=6):
+        rpc("label.add", [lbl], i)
+
+    print("OK")
+except Exception as e:
+    print(f"ERROR: {e}"); sys.exit(1)
+PYEOF
+  )
+
+  if [[ "$deluge_result" == "OK" ]]; then
     ok "Deluge Labels plugin enabled, labels created: radarr, sonarr"
   else
-    warn "Could not log in to Deluge WebUI — Labels plugin not configured (check DELUGE_PASSWORD in .env)"
+    warn "Deluge Labels setup failed: ${deluge_result} (check DELUGE_PASSWORD in .env)"
   fi
-  rm -f "$DELUGE_COOKIE"
 
   header "Adding Deluge download client"
 
@@ -437,10 +377,45 @@ if $USE_USENET; then
       else
         sed -i "/^\[misc\]/a host_whitelist = sabnzbd, localhost" "$SABNZBD_INI"
       fi
-      ok "SABnzbd host_whitelist patched — restarting SABnzbd..."
-      docker restart sabnzbd >/dev/null
-      sleep 8
+      ok "SABnzbd host_whitelist patched"
     fi
+
+    # Ensure movies and tv categories exist in sabnzbd.ini
+    cat_result=$(python3 - "$SABNZBD_INI" << 'PYEOF'
+import sys
+ini_path = sys.argv[1]
+with open(ini_path) as f:
+    content = f.read()
+changed = False
+for cat in ["movies", "tv"]:
+    if f"[[{cat}]]" not in content:
+        block = (f"\n[[{cat}]]\n"
+                 f"    name = {cat}\n"
+                 f"    order = 0\n"
+                 f"    pp = \"\"\n"
+                 f"    script = Default\n"
+                 f"    dir = \n"
+                 f"    newzbin = \n"
+                 f"    priority = -100\n")
+        if "[categories]" in content:
+            content = content.replace("[categories]\n", "[categories]\n" + block, 1)
+        else:
+            content += "\n[categories]\n" + block
+        changed = True
+if changed:
+    with open(ini_path, "w") as f:
+        f.write(content)
+    print("UPDATED")
+else:
+    print("ALREADY_OK")
+PYEOF
+    )
+    [[ "$cat_result" == "UPDATED" ]] && ok "SABnzbd categories added: movies, tv" \
+      || skip "SABnzbd categories already present"
+
+    ok "Restarting SABnzbd..."
+    docker restart sabnzbd >/dev/null
+    sleep 8
 
     SABNZBD_KEY=$(grep '^api_key' "$SABNZBD_INI" | head -1 | cut -d'=' -f2 | tr -d ' "' || true)
     if [[ -z "$SABNZBD_KEY" ]]; then

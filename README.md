@@ -42,12 +42,13 @@ The stack is split into a base + optional modules. Mix and match what you need:
 
 | File | What it adds | When to use |
 |---|---|---|
-| `docker-compose.yml` | Plex, Radarr, Sonarr, Prowlarr, Tautulli, Bazarr, Fetcharr | Always |
+| `docker-compose.yml` | Plex, Radarr, Sonarr, Prowlarr, Tautulli, Fetcharr | Always |
 | `compose/torrent.yml` | Deluge torrent client | If you use torrents |
 | `compose/usenet.yml` | SABnzbd usenet client | If you use usenet |
 | `compose/vpn.yml` | Gluetun VPN + moves Deluge/Prowlarr behind it | If you want VPN for torrents |
 | `compose/trakt.yml` | Trakt watchlist sync + cleanup | If you use Trakt |
 | `compose/macvlan.yml` | Gives Plex a dedicated LAN IP | If you want LAN direct access |
+| `compose/bazarr.yml` | Bazarr automatic subtitles | If you want auto-subtitles |
 
 `setup.sh` generates a `start.sh` with the right combination for your setup.
 
@@ -72,8 +73,8 @@ docker compose -f docker-compose.yml -f compose/usenet.yml up -d
 | Sonarr | TV automation | 8989 |
 | Prowlarr | Indexer management | 9696 |
 | Tautulli | Plex stats + script triggers | 8181 |
-| Bazarr | Automatic subtitles | 6767 |
-| Fetcharr | Plex watchlist → Radarr/Sonarr | 8080 |
+| Bazarr *(bazarr)* | Automatic subtitles | 6767 |
+| Fetcharr | Plex watchlist → Radarr/Sonarr (background, no UI) | — |
 | Deluge *(torrent)* | Torrent client | 8112 |
 | SABnzbd *(usenet)* | Usenet client | 8085 |
 | Gluetun *(vpn)* | VPN gateway | — |
@@ -90,7 +91,7 @@ Two Tautulli notification scripts live in `tautulliScripts/`:
 
 **`plex_progressive_downloader.py`** — pre-fetches episodes as you watch. At 50% through a season it downloads the next one. At the last available episode it enables monitoring for all seasons.
 
-See [SETUP.md](SETUP.md) for installation instructions.
+`configure.sh` copies both scripts to `config/tautulli/scripts/`, patches all credentials in-place, and creates the Tautulli notification agents automatically. The only manual step is a one-time OAuth login for the scrobbler.
 
 ---
 

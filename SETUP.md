@@ -8,10 +8,9 @@ This guide covers what comes after.
 ## Prerequisites
 
 - Docker + Docker Compose v2
-- `git`
-- For Tautulli scripts: Python 3 available inside the Tautulli container (it's pre-installed)
+- Python 3 on the host (used by `configure.sh`)
 - For VPN: a supported provider (AirVPN, Mullvad, ProtonVPN, NordVPN, etc.)
-- For Trakt: a Trakt.tv account
+- For Trakt: a Trakt.tv account and API app
 
 ---
 
@@ -26,21 +25,19 @@ Answer the prompts. At the end you'll have:
 - `start.sh` / `stop.sh` — pre-built compose commands for your chosen modules
 - `config/` subdirectories for each enabled service
 - Your media directories created
-
-Then start the stack:
-```bash
-./start.sh
-```
+- `TODO.md` — a per-install checklist
 
 ---
 
 ## 2. Configure VPN (if enabled)
 
-Place your VPN config file at `config/gluetun/vpn.ovpn`.
+Place your VPN config file at `config/gluetun/vpn.ovpn` **before** running `start.sh`.
+`start.sh` will refuse to start if the file is missing.
 
 For **AirVPN**: download a `.ovpn` file from your AirVPN client area.
 
-For **other providers**: edit `compose/vpn.yml` — the `gluetun` service environment block supports Mullvad, ProtonVPN, NordVPN, and more. See: https://github.com/qdm12/gluetun/wiki
+For **other providers**: edit `compose/vpn.yml` — the `gluetun` environment block supports
+Mullvad, ProtonVPN, NordVPN, and more. See: https://github.com/qdm12/gluetun/wiki
 
 Verify after startup:
 ```bash
@@ -50,177 +47,144 @@ docker exec gluetun wget -qO- https://ifconfig.me
 
 ---
 
-## 3. Get Plex claim token
+## 3. Start the stack
 
-If you set `PLEX_CLAIM` blank during setup, get a token now:
-
-1. Go to https://www.plex.tv/claim (token expires in 4 minutes)
-2. Add it to `.env` → `PLEX_CLAIM=claim-xxxxx`
-3. Restart Plex: `docker compose restart plex`
-
-Only needed on first run to link the server to your Plex account.
+```bash
+./start.sh
+```
 
 ---
 
-## 4. Run configure.sh
+## 4. Get a Plex claim token (first run only)
 
-`configure.sh` automatically handles all of the following — no manual UI clicks needed:
+If you left `PLEX_CLAIM` blank during setup, get a token now:
 
-- Reads API keys from each service's config file
-- Updates `.env` with the discovered keys
-- Adds root folders to Radarr and Sonarr
-- Connects Prowlarr to Radarr and Sonarr
-- Adds Deluge and/or SABnzbd as download clients in both Radarr and Sonarr
-- Restarts Trakt containers with the correct API keys (if enabled)
+1. Go to https://www.plex.tv/claim (expires in 4 minutes)
+2. Add it to `.env` → `PLEX_CLAIM=claim-xxxxx`
+3. Restart Plex: `docker compose restart plex`
+
+Only needed once to link the server to your Plex account.
+
+---
+
+## 5. Run configure.sh
+
+`configure.sh` automatically configures everything it can without human interaction.
+Run it once the stack is up:
 
 ```bash
 ./configure.sh
 ```
 
-It is safe to re-run — it checks for existing configuration before adding anything.
+It is safe to re-run — it checks for existing config before adding anything.
 
-After it runs, **the only thing left in Prowlarr** is adding indexers:
+### What it does
 
-1. Open http://localhost:9696 → Indexers → Add Indexer
-2. Add your torrent and/or usenet indexers
-3. They sync to Radarr and Sonarr automatically — nothing to configure there
+| Step | What gets configured |
+|---|---|
+| API keys | Reads keys from each service's `config.xml` / INI, saves to `.env` |
+| Root folders | Sets `/media/movies` and `/media/tv` in Radarr and Sonarr |
+| Prowlarr sync | Connects Prowlarr → Radarr and Sonarr (full sync) |
+| Deluge | Enables Labels plugin, creates `radarr`/`sonarr` labels, adds client to Radarr + Sonarr |
+| SABnzbd | Patches hostname whitelist, creates `movies`/`tv` categories, adds client to Radarr + Sonarr |
+| Fetcharr | Reads Plex token from `Preferences.xml`, writes `config/fetcharr/fetcharr.yaml` |
+| Tautulli → Plex | Patches Tautulli config to point at the `plex` container |
+| Tautulli scripts | Copies scripts to `/scripts`, patches all credentials in-place |
+| Tautulli agents | Creates Trakt Scrobbler and Progressive Downloader notification agents |
+| Bazarr | Connects Bazarr to Radarr and Sonarr via Bazarr API |
+| Trakt webhooks | Adds "on delete" webhooks in Radarr and Sonarr → `trakt-watchlist-cleanup` |
+| Plex libraries | Creates Movies (`/media/movies`) and TV Shows (`/media/tv`) libraries |
+| Trakt containers | Restarts with updated API keys |
 
 ---
 
-## 5. Authenticate Trakt (if enabled)
+## 6. Manual steps remaining after configure.sh
 
+### Prowlarr — add indexers
+
+Open http://localhost:9696 → Indexers → Add Indexer
+
+Add your torrent and/or usenet indexers here. They sync to Radarr and Sonarr
+automatically — no manual setup needed there.
+
+---
+
+### SABnzbd — add your news server (usenet only)
+
+Open http://localhost:8085 → Config → Servers → Add Server
+
+Enter your Usenet provider credentials: hostname, port, username, password, SSL on/off.
+Your provider's website will have these details.
+
+---
+
+### Quality profiles (optional)
+
+By default everything uses `Any`. To change:
+
+1. In **Radarr** → Settings → Profiles → create or edit a quality profile
+2. In **Sonarr** → Settings → Profiles → same
+3. Update `.env` to match the exact profile name:
+   ```
+   RADARR_QUALITY_PROFILE=1080p
+   SONARR_QUALITY_PROFILE=1080p
+   ```
+4. Re-run `./configure.sh` so Fetcharr picks up the new profile name.
+
+---
+
+### Plex — verify media libraries
+
+`configure.sh` creates both libraries automatically. If they don't appear:
+
+- Open Plex → Settings → Libraries → Add Library
+- **Movies** → folder: `/media/movies`
+- **TV Shows** → folder: `/media/tv`
+
+---
+
+### Trakt — OAuth flows
+
+`configure.sh` handles both OAuth flows interactively — it pauses, prints a URL and
+device code, and waits while you authorize in your browser. No separate commands needed.
+
+If re-authentication is ever needed:
 ```bash
+# Scrobbler
+docker exec tautulli python /scripts/trakt_scrobbler.py --setup
+
+# Watchlist sync
 docker compose -f docker-compose.yml -f compose/trakt.yml \
   run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup
 ```
 
-Follow the instructions: visit the URL, enter the code, authorize. Token saves to `config/trakt-watchlist-sync/trakt_tokens.json`.
-
-Restart: `./stop.sh && ./start.sh`
-
-**Cleanup webhooks** (removes items from Trakt when deleted locally):
-
-In Radarr → Settings → Connect → Add → Webhook:
-- URL: `http://trakt-watchlist-cleanup:5000/radarr`
-- Trigger: `On Movie Delete`
-
-In Sonarr → Settings → Connect → Add → Webhook:
-- URL: `http://trakt-watchlist-cleanup:5000/sonarr`
-- Trigger: `On Series Delete`
-
 ---
 
-## 6. Tautulli scripts
+### Bazarr — subtitle providers (if enabled)
 
-These scripts run inside Tautulli as notification agents.
+`configure.sh` connects Bazarr to Radarr and Sonarr automatically.
+The only thing left is adding your subtitle sources:
 
-### Install
-
-```bash
-cp tautulliScripts/trakt_scrobbler.py config/tautulli/scripts/
-cp tautulliScripts/plex_progressive_downloader.py config/tautulli/scripts/
-```
-
-### Update credentials
-
-**`trakt_scrobbler.py`** — edit these constants at the top of the file:
-```python
-TRAKT_CLIENT_ID     = "your_trakt_client_id"
-TRAKT_CLIENT_SECRET = "your_trakt_client_secret"
-TAUTULLI_API_KEY    = "your_tautulli_api_key"
-# Tautulli API key: Settings → Web Interface → API key
-```
-
-**`plex_progressive_downloader.py`** — edit:
-```python
-SONARR_APIKEY = "your_sonarr_api_key"
-```
-
-### Authenticate scrobbler
-
-```bash
-docker exec -it tautulli python /scripts/trakt_scrobbler.py --setup
-```
-
-Follow the OAuth flow. Token saves to `/scripts/trakt_tokens.json`.
-
-### Set up notification agents in Tautulli
-
-**Trakt Scrobbler** (tracks play/pause/stop):
-
-Settings → Notification Agents → Add → Script
-- Script folder: `/scripts`
-- Script file: `trakt_scrobbler.py`
-- Triggers: Playback Start, Playback Stop, Playback Pause, Playback Resume
-- Arguments for each trigger:
-  ```
-  --action {action} --user {username} --title "{title}" --year {year} --progress {progress_percent} --duration {duration} --show_name "{show_name}" --season_num {season_num} --episode_num {episode_num} --tmdb_id {tmdb_id} --tvdb_id {thetvdb_id} --imdb_id {imdb_id}
-  ```
-
-**Progressive Downloader** (pre-fetches upcoming episodes):
-
-Settings → Notification Agents → Add → Script
-- Script folder: `/scripts`
-- Script file: `plex_progressive_downloader.py`
-- Trigger: Playback Start (filter: Media Type = `episode`)
-- Arguments:
-  ```
-  -tvid {thetvdb_id} -sn {season_num} -en {episode_num}
-  ```
-
----
-
-## 7. Connect Tautulli to Plex
-
-Settings → Plex Media Server
-- Plex IP: `plex` (Docker DNS) or your macvlan LAN IP
-- Port: `32400`
-- Authenticate with your Plex token
-
----
-
-## 8. Configure Fetcharr
-
-Fetcharr monitors your Plex watchlist and sends items to Radarr/Sonarr.
-
-Edit `config/fetcharr/config.yml` (generated on first run):
-```yaml
-radarr:
-  - url: http://radarr:7878
-    apiKey: your_radarr_api_key
-    rootFolder: /media/movies
-
-sonarr:
-  - url: http://sonarr:8989
-    apiKey: your_sonarr_api_key
-    rootFolder: /media/tv
-```
-
-Fetcharr also needs a Plex token to read your watchlist — configure this in the Fetcharr UI at http://localhost:8080.
-
----
-
-## 9. Configure Bazarr
-
-http://localhost:6767
-
-- Settings → Sonarr: URL `http://sonarr:8989`, API key
-- Settings → Radarr: URL `http://radarr:7878`, API key
-- Settings → Providers: add subtitle providers (OpenSubtitles, etc.)
-- Settings → Languages: set your language profile
+Open http://localhost:6767:
+- Settings → Providers → add your subtitle sources (OpenSubtitles, Subscene, etc.)
+- Settings → Languages → set your preferred language profile
 
 ---
 
 ## macvlan / Plex LAN IP
 
-The macvlan module (`compose/macvlan.yml`) gives Plex a real LAN IP so local clients connect directly without Docker port-forwarding. All values come from `.env` — set them during `setup.sh` or edit `.env` manually.
+The macvlan module (`compose/macvlan.yml`) gives Plex a real LAN IP so local clients
+connect directly without Docker port-forwarding. All values come from `.env` — set
+them during `setup.sh` or edit `.env` manually.
 
-The host machine itself cannot reach the macvlan IP by default. Access Plex from another device, or create a macvlan shim interface on the host:
+The host machine itself cannot reach the macvlan IP by default. Access Plex from
+another device on the LAN, or create a macvlan shim on the host:
+
 ```bash
 ip link add macvlan0 link YOUR_INTERFACE type macvlan mode bridge
 ip addr add 192.168.1.101/32 dev macvlan0  # any unused LAN IP, NOT the Plex one
 ip link set macvlan0 up
-ip route add 192.168.1.100/32 dev macvlan0  # route to Plex's IP
+ip route add 192.168.1.100/32 dev macvlan0  # route to Plex's LAN IP
 ```
 
 ---
@@ -229,7 +193,7 @@ ip route add 192.168.1.100/32 dev macvlan0  # route to Plex's IP
 
 ```bash
 ./stop.sh
-docker compose pull   # pull latest images
+docker compose pull
 ./start.sh
 ```
 

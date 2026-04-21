@@ -110,26 +110,6 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
-  bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
-    container_name: bazarr
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-UTC}
-    volumes:
-      - ./config/bazarr:/config
-      - ${MEDIA_DIR}:/media
-    ports:
-      - "6767:6767"
-    networks:
-      - media-network
-    depends_on:
-      - radarr
-      - sonarr
-    logging: *default-logging
-    restart: unless-stopped
-
   fetcharr:
     image: ghcr.io/fetcharr/fetcharr:latest
     container_name: fetcharr
@@ -139,8 +119,6 @@ services:
       - TZ=${TZ:-UTC}
     volumes:
       - ./config/fetcharr:/config
-    ports:
-      - "8080:8080"
     networks:
       - media-network
     depends_on:

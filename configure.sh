@@ -42,11 +42,12 @@ fi
 source "${SCRIPT_DIR}/.env"
 
 # Detect which modules are active from start.sh
-USE_TORRENT=false; USE_USENET=false; USE_VPN=false; USE_TRAKT=false
+USE_TORRENT=false; USE_USENET=false; USE_VPN=false; USE_TRAKT=false; USE_BAZARR=false
 grep -q 'compose/torrent.yml' "${SCRIPT_DIR}/start.sh" && USE_TORRENT=true
 grep -q 'compose/usenet.yml'  "${SCRIPT_DIR}/start.sh" && USE_USENET=true
 grep -q 'compose/vpn.yml'     "${SCRIPT_DIR}/start.sh" && USE_VPN=true
 grep -q 'compose/trakt.yml'   "${SCRIPT_DIR}/start.sh" && USE_TRAKT=true
+grep -q 'compose/bazarr.yml'  "${SCRIPT_DIR}/start.sh" && USE_BAZARR=true
 
 COMPOSE_CMD=$(grep 'docker compose' "${SCRIPT_DIR}/start.sh" | head -1 | sed 's/ up -d.*//' | sed 's|cd.*; ||')
 
@@ -490,7 +491,462 @@ JSON
   fi
 fi
 
-# ─── Step 7: Restart Trakt containers with updated keys ───────────────────────
+# ─── Step 7: Configure Fetcharr ──────────────────────────────────────────────
+header "Configuring Fetcharr"
+
+PLEX_PREFS="${SCRIPT_DIR}/config/plex/Preferences.xml"
+FETCHARR_CFG="${SCRIPT_DIR}/config/fetcharr/fetcharr.yaml"
+PLEX_TOKEN=""
+
+if [[ -f "$PLEX_PREFS" ]]; then
+  PLEX_TOKEN=$(grep -oP '(?<=PlexOnlineToken=")[^"]+' "$PLEX_PREFS" 2>/dev/null || true)
+  if [[ -n "$PLEX_TOKEN" ]]; then
+    update_env "PLEX_TOKEN" "$PLEX_TOKEN"
+    ok "Plex token found: ${PLEX_TOKEN:0:8}..."
+  else
+    warn "PlexOnlineToken not found in Preferences.xml — have you signed into Plex yet?"
+  fi
+else
+  warn "Plex config not found — is Plex running? Skipping Fetcharr config."
+fi
+
+if [[ -n "$PLEX_TOKEN" ]]; then
+  RADARR_QUALITY=$(echo "${RADARR_QUALITY_PROFILE:-any}" | tr '[:upper:]' '[:lower:]')
+  SONARR_QUALITY=$(echo "${SONARR_QUALITY_PROFILE:-any}" | tr '[:upper:]' '[:lower:]')
+
+  cat > "$FETCHARR_CFG" <<YAML
+plex:
+  api_token: ${PLEX_TOKEN}
+  sync_friends_watchlist: false
+
+sonarr:
+  default:
+    base_url: http://sonarr:8989
+    api_key: ${SONARR_KEY}
+    quality_profile: ${SONARR_QUALITY}
+    root_folder: ${SONARR_ROOT_FOLDER:-/media/tv}
+    update_existing: false
+
+radarr:
+  default:
+    base_url: http://radarr:7878
+    api_key: ${RADARR_KEY}
+    quality_profile: ${RADARR_QUALITY}
+    root_folder: ${RADARR_ROOT_FOLDER:-/media/movies}
+    update_existing: false
+YAML
+  ok "Fetcharr config written → ${FETCHARR_CFG}"
+  docker restart fetcharr >/dev/null 2>&1 && ok "Fetcharr restarted" || true
+  todo_done "fetcharr-config"
+else
+  warn "Fetcharr config skipped — set PLEX_TOKEN in .env and re-run configure.sh"
+fi
+
+# ─── Step 8: Configure Tautulli scripts ──────────────────────────────────────
+header "Configuring Tautulli scripts"
+
+SCRIPTS_SRC="${SCRIPT_DIR}/tautulliScripts"
+SCRIPTS_DEST="${SCRIPT_DIR}/config/tautulli/scripts"
+
+if [[ ! -d "$SCRIPTS_SRC" ]]; then
+  warn "tautulliScripts/ not found — skipping Tautulli setup"
+else
+  mkdir -p "$SCRIPTS_DEST"
+
+  # ── Tautulli API key (re-read if not already set from Step 2) ─────────────
+  TAUTULLI_INI="${SCRIPT_DIR}/config/tautulli/config/config.ini"
+  if [[ -z "${TAUTULLI_KEY:-}" ]]; then
+    wait_for_file "$TAUTULLI_INI" "Tautulli config" \
+      && TAUTULLI_KEY=$(grep -A30 '^\[General\]' "$TAUTULLI_INI" | grep 'api_key' \
+           | head -1 | cut -d'=' -f2 | tr -d ' "' || true) \
+      || true
+    [[ -n "$TAUTULLI_KEY" ]] && update_env "TAUTULLI_API_KEY" "$TAUTULLI_KEY"
+  fi
+
+  # ── Copy + patch trakt_scrobbler.py ──────────────────────────────────────
+  SCROBBLER_SRC="${SCRIPTS_SRC}/trakt_scrobbler.py"
+  SCROBBLER_DEST="${SCRIPTS_DEST}/trakt_scrobbler.py"
+  if [[ -f "$SCROBBLER_SRC" ]]; then
+    cp "$SCROBBLER_SRC" "$SCROBBLER_DEST"
+    [[ -n "${TRAKT_CLIENT_ID:-}"     ]] && sed -i "s|^TRAKT_CLIENT_ID = .*|TRAKT_CLIENT_ID = '${TRAKT_CLIENT_ID}'|"         "$SCROBBLER_DEST"
+    [[ -n "${TRAKT_CLIENT_SECRET:-}" ]] && sed -i "s|^TRAKT_CLIENT_SECRET = .*|TRAKT_CLIENT_SECRET = '${TRAKT_CLIENT_SECRET}'|" "$SCROBBLER_DEST"
+    [[ -n "${TAUTULLI_KEY:-}"        ]] && sed -i "s|^TAUTULLI_API_KEY = .*|TAUTULLI_API_KEY = '${TAUTULLI_KEY}'|"           "$SCROBBLER_DEST"
+    ok "trakt_scrobbler.py → config/tautulli/scripts/ (credentials patched)"
+  fi
+
+  # ── Copy + patch plex_progressive_downloader.py ───────────────────────────
+  DOWNLOADER_SRC="${SCRIPTS_SRC}/plex_progressive_downloader.py"
+  DOWNLOADER_DEST="${SCRIPTS_DEST}/plex_progressive_downloader.py"
+  if [[ -f "$DOWNLOADER_SRC" ]]; then
+    cp "$DOWNLOADER_SRC" "$DOWNLOADER_DEST"
+    sed -i "s|^SONARR_APIKEY = .*|SONARR_APIKEY = '${SONARR_KEY}'|" "$DOWNLOADER_DEST"
+    ok "plex_progressive_downloader.py → config/tautulli/scripts/ (credentials patched)"
+  fi
+
+  todo_done "tautulli-scripts"
+
+  # ── Connect Tautulli to Plex ──────────────────────────────────────────────
+  if [[ -n "${PLEX_TOKEN:-}" && -f "$TAUTULLI_INI" ]]; then
+    plex_conn=$(python3 - "$TAUTULLI_INI" "plex" "$PLEX_TOKEN" << 'PYEOF'
+import sys, re
+ini_path, plex_ip, plex_token = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(ini_path) as f:
+    content = f.read()
+changed = False
+for key, val in [('plex_ip', plex_ip), ('plex_token', plex_token)]:
+    # Only patch if the key exists but is currently blank
+    pattern = rf'^({re.escape(key)}\s*=)\s*$'
+    new = re.sub(pattern, rf'\g<1> {val}', content, flags=re.MULTILINE)
+    if new != content:
+        content, changed = new, True
+if changed:
+    with open(ini_path, 'w') as f:
+        f.write(content)
+    print("UPDATED")
+else:
+    print("ALREADY_OK")
+PYEOF
+    )
+    if [[ "$plex_conn" == "UPDATED" ]]; then
+      ok "Tautulli → Plex connection configured (plex:32400) — restarting Tautulli..."
+      docker restart tautulli >/dev/null
+      sleep 5
+    else
+      skip "Tautulli → Plex already configured"
+    fi
+  elif [[ -z "${PLEX_TOKEN:-}" ]]; then
+    warn "Plex token not yet available — Tautulli → Plex skipped (re-run configure.sh after signing into Plex)"
+  fi
+
+  # ── Create Tautulli notification agents via API ───────────────────────────
+  if [[ -z "${TAUTULLI_KEY:-}" ]]; then
+    warn "Tautulli API key not available — notification agents not configured"
+    warn "Re-run configure.sh once Tautulli has started to finish setup"
+  else
+    echo -n "  Waiting for Tautulli..."
+    for _ in $(seq 1 20); do
+      code=$(curl -s -o /dev/null -w "%{http_code}" \
+        "http://localhost:8181/api/v2?apikey=${TAUTULLI_KEY}&cmd=get_server_info" 2>/dev/null || true)
+      [[ "$code" == "200" ]] && { echo " ready"; break; }
+      sleep 3; echo -n "."
+    done
+    echo ""
+
+    tautulli_agents=$(python3 << PYEOF
+import json, urllib.request, urllib.parse, sys
+
+BASE = "http://localhost:8181/api/v2"
+KEY  = "${TAUTULLI_KEY}"
+
+def tapi(**params):
+    params["apikey"] = KEY
+    data = urllib.parse.urlencode(params).encode()
+    resp = urllib.request.urlopen(urllib.request.Request(BASE, data=data))
+    return json.loads(resp.read())
+
+try:
+    existing = [n.get("friendly_name") for n in
+                tapi(cmd="get_notifiers").get("response", {}).get("data", [])]
+
+    SCROBBLER_ARGS = (
+        '--action {action} --user {username} --title "{title}" --year {year} '
+        '--progress {progress_percent} --duration {duration} '
+        '--show_name "{show_name}" --season_num {season_num} --episode_num {episode_num} '
+        '--tmdb_id {tmdb_id} --tvdb_id {thetvdb_id} --imdb_id {imdb_id}'
+    )
+    DOWNLOADER_ARGS = '-tvid {thetvdb_id} -sn {season_num} -en {episode_num}'
+
+    results = []
+
+    if "Trakt Scrobbler" not in existing:
+        r   = tapi(cmd="add_notifier", agent_id=12)
+        nid = r["response"]["data"]["notifier_id"]
+        cfg = json.dumps({"script_folder": "/scripts",
+                          "script_file":   "trakt_scrobbler.py",
+                          "script_timeout": 30})
+        tapi(cmd="set_notifier", notifier_id=nid, agent_id=12,
+             friendly_name="Trakt Scrobbler",
+             config=cfg,
+             on_play=1, on_stop=1, on_pause=1, on_resume=1,
+             on_play_subject=SCROBBLER_ARGS,
+             on_stop_subject=SCROBBLER_ARGS,
+             on_pause_subject=SCROBBLER_ARGS,
+             on_resume_subject=SCROBBLER_ARGS)
+        results.append("SCROBBLER_OK")
+    else:
+        results.append("SCROBBLER_EXISTS")
+
+    if "Progressive Downloader" not in existing:
+        r   = tapi(cmd="add_notifier", agent_id=12)
+        nid = r["response"]["data"]["notifier_id"]
+        cfg = json.dumps({"script_folder": "/scripts",
+                          "script_file":   "plex_progressive_downloader.py",
+                          "script_timeout": 30})
+        cond = json.dumps([[{"parameter": "media_type",
+                             "operator":  "is",
+                             "value":     ["episode"]}]])
+        tapi(cmd="set_notifier", notifier_id=nid, agent_id=12,
+             friendly_name="Progressive Downloader",
+             config=cfg, conditions=cond,
+             on_play=1,
+             on_play_subject=DOWNLOADER_ARGS)
+        results.append("DOWNLOADER_OK")
+    else:
+        results.append("DOWNLOADER_EXISTS")
+
+    print(" ".join(results))
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    )
+
+    if echo "$tautulli_agents" | grep -q "SCROBBLER_OK"; then
+      ok "Tautulli: Trakt Scrobbler notification agent created"
+      todo_done "tautulli-scrobbler"
+    elif echo "$tautulli_agents" | grep -q "SCROBBLER_EXISTS"; then
+      skip "Tautulli: Trakt Scrobbler agent already exists"
+      todo_done "tautulli-scrobbler"
+    else
+      warn "Tautulli: Trakt Scrobbler agent setup failed — configure manually in Tautulli UI"
+    fi
+
+    if echo "$tautulli_agents" | grep -q "DOWNLOADER_OK"; then
+      ok "Tautulli: Progressive Downloader notification agent created"
+      todo_done "tautulli-downloader"
+    elif echo "$tautulli_agents" | grep -q "DOWNLOADER_EXISTS"; then
+      skip "Tautulli: Progressive Downloader agent already exists"
+      todo_done "tautulli-downloader"
+    else
+      warn "Tautulli: Progressive Downloader agent setup failed — configure manually in Tautulli UI"
+    fi
+  fi
+
+  # ── Trakt scrobbler OAuth ─────────────────────────────────────────────────
+  if $USE_TRAKT && [[ -f "${SCROBBLER_DEST:-}" ]]; then
+    SCROBBLER_TOKEN="${SCRIPTS_DEST}/trakt_tokens.json"
+    if [[ -f "$SCROBBLER_TOKEN" ]]; then
+      skip "Trakt scrobbler already authenticated"
+    else
+      header "Authenticating Trakt scrobbler"
+      echo ""
+      echo -e "  ${YELLOW}Action required: a URL and code will appear below.${RESET}"
+      echo -e "  ${YELLOW}Open the URL in your browser, enter the code, then come back.${RESET}"
+      echo ""
+      docker exec tautulli python /scripts/trakt_scrobbler.py --setup \
+        && ok "Trakt scrobbler authenticated — token saved" \
+        || warn "Scrobbler auth failed — re-run: docker exec tautulli python /scripts/trakt_scrobbler.py --setup"
+    fi
+  fi
+fi
+
+# ─── Step 9: Connect Bazarr to Radarr + Sonarr ───────────────────────────────
+if $USE_BAZARR; then
+  header "Connecting Bazarr to Radarr and Sonarr"
+
+  # Find Bazarr API key from its config (linuxserver image writes it here)
+  BAZARR_KEY=""
+  for cfg in "${SCRIPT_DIR}/config/bazarr/config/config.yaml" \
+             "${SCRIPT_DIR}/config/bazarr/data/config.yaml"; do
+    if [[ -f "$cfg" ]]; then
+      BAZARR_KEY=$(grep -oP '(?<=apikey: )\S+' "$cfg" | head -1 || true)
+      [[ -n "$BAZARR_KEY" ]] && break
+    fi
+  done
+
+  if [[ -z "$BAZARR_KEY" ]]; then
+    warn "Bazarr config not found — is Bazarr running? Skipping."
+  else
+    BAZARR_BASE="http://localhost:6767"
+    ok "Bazarr API key: ${BAZARR_KEY:0:8}..."
+
+    # Wait for Bazarr to be ready
+    echo -n "  Waiting for Bazarr..."
+    for _ in $(seq 1 20); do
+      code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "X-API-KEY: $BAZARR_KEY" "${BAZARR_BASE}/api/system/status" 2>/dev/null || true)
+      [[ "$code" == "200" ]] && { echo " ready"; break; }
+      sleep 3; echo -n "."
+    done
+    echo ""
+
+    bazarr_result=$(python3 << PYEOF
+import json, urllib.request, urllib.error, sys
+
+BASE    = "http://localhost:6767/api"
+KEY     = "${BAZARR_KEY}"
+HEADERS = {"X-API-KEY": KEY, "Content-Type": "application/json"}
+
+def bapi(method, path, body=None):
+    url  = BASE + path
+    data = json.dumps(body).encode() if body else None
+    req  = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+    try:
+        resp = urllib.request.urlopen(req)
+        return resp.status, json.loads(resp.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+results = []
+
+# ── Sonarr ──────────────────────────────────────────────────────────────────
+status, current = bapi("GET", "/sonarr")
+if status == 200 and current.get("enabled"):
+    results.append("SONARR_EXISTS")
+else:
+    status, _ = bapi("POST", "/sonarr", {
+        "enabled":              True,
+        "ip":                   "sonarr",
+        "port":                 8989,
+        "apikey":               "${SONARR_KEY}",
+        "ssl":                  False,
+        "base_url":             "/",
+        "only_monitored":       False,
+        "series_sync":          60,
+        "excluded_tags":        [],
+        "excluded_series_types": [],
+        "use_ffprobe_cache":    True,
+        "defer_search_after_sync": False,
+    })
+    results.append("SONARR_OK" if status in (200, 204) else f"SONARR_ERR_{status}")
+
+# ── Radarr ──────────────────────────────────────────────────────────────────
+status, current = bapi("GET", "/radarr")
+if status == 200 and current.get("enabled"):
+    results.append("RADARR_EXISTS")
+else:
+    status, _ = bapi("POST", "/radarr", {
+        "enabled":        True,
+        "ip":             "radarr",
+        "port":           7878,
+        "apikey":         "${RADARR_KEY}",
+        "ssl":            False,
+        "base_url":       "/",
+        "only_monitored": False,
+        "movies_sync":    60,
+        "excluded_tags":  [],
+    })
+    results.append("RADARR_OK" if status in (200, 204) else f"RADARR_ERR_{status}")
+
+print(" ".join(results))
+PYEOF
+    )
+
+    echo "$bazarr_result" | grep -q "SONARR_OK"     && ok   "Bazarr → Sonarr connected" \
+      || { echo "$bazarr_result" | grep -q "SONARR_EXISTS" && skip "Bazarr → Sonarr already configured" \
+        || warn "Bazarr → Sonarr failed: $(echo "$bazarr_result" | grep -oP 'SONARR_ERR_\S+')"; }
+
+    echo "$bazarr_result" | grep -q "RADARR_OK"     && ok   "Bazarr → Radarr connected" \
+      || { echo "$bazarr_result" | grep -q "RADARR_EXISTS" && skip "Bazarr → Radarr already configured" \
+        || warn "Bazarr → Radarr failed: $(echo "$bazarr_result" | grep -oP 'RADARR_ERR_\S+')"; }
+  fi
+fi
+
+# ─── Step 10: Trakt cleanup webhooks ─────────────────────────────────────────
+if $USE_TRAKT; then
+  header "Configuring Trakt cleanup webhooks"
+
+  WEBHOOK_URL_RADARR="http://trakt-watchlist-cleanup:5000/radarr"
+  WEBHOOK_URL_SONARR="http://trakt-watchlist-cleanup:5000/sonarr"
+
+  # Radarr — on movie delete
+  existing=$(arr_get "${RADARR_BASE}/api/v3/notification" "$RADARR_KEY")
+  if already_exists "$existing" "Trakt Cleanup"; then
+    skip "Trakt Cleanup webhook already in Radarr"
+  else
+    payload=$(cat <<JSON
+{
+  "name": "Trakt Cleanup",
+  "onMovieDelete": true,
+  "implementation": "Webhook",
+  "configContract": "WebhookSettings",
+  "fields": [
+    {"name": "url",      "value": "${WEBHOOK_URL_RADARR}"},
+    {"name": "method",   "value": 1},
+    {"name": "username", "value": ""},
+    {"name": "password", "value": ""}
+  ],
+  "tags": []
+}
+JSON
+)
+    result=$(arr_post_plain "${RADARR_BASE}/api/v3/notification" "$RADARR_KEY" "$payload")
+    echo "$result" | grep -q '"id"' \
+      && ok "Radarr → Trakt Cleanup webhook configured" \
+      || warn "Radarr webhook failed: $(echo "$result" | head -c 200)"
+  fi
+
+  # Sonarr — on series delete
+  existing=$(arr_get "${SONARR_BASE}/api/v3/notification" "$SONARR_KEY")
+  if already_exists "$existing" "Trakt Cleanup"; then
+    skip "Trakt Cleanup webhook already in Sonarr"
+  else
+    payload=$(cat <<JSON
+{
+  "name": "Trakt Cleanup",
+  "onSeriesDelete": true,
+  "implementation": "Webhook",
+  "configContract": "WebhookSettings",
+  "fields": [
+    {"name": "url",      "value": "${WEBHOOK_URL_SONARR}"},
+    {"name": "method",   "value": 1},
+    {"name": "username", "value": ""},
+    {"name": "password", "value": ""}
+  ],
+  "tags": []
+}
+JSON
+)
+    result=$(arr_post_plain "${SONARR_BASE}/api/v3/notification" "$SONARR_KEY" "$payload")
+    echo "$result" | grep -q '"id"' \
+      && ok "Sonarr → Trakt Cleanup webhook configured" \
+      || warn "Sonarr webhook failed: $(echo "$result" | head -c 200)"
+  fi
+fi
+
+# ─── Step 11: Create Plex libraries ──────────────────────────────────────────
+if [[ -n "${PLEX_TOKEN:-}" ]]; then
+  header "Creating Plex libraries"
+
+  PLEX_BASE="http://localhost:32400"
+
+  # Wait for Plex to respond
+  echo -n "  Waiting for Plex..."
+  for _ in $(seq 1 20); do
+    code=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "X-Plex-Token: $PLEX_TOKEN" "${PLEX_BASE}/library/sections" 2>/dev/null || true)
+    [[ "$code" == "200" ]] && { echo " ready"; break; }
+    sleep 3; echo -n "."
+  done
+  echo ""
+
+  existing_libs=$(curl -s -H "X-Plex-Token: $PLEX_TOKEN" \
+    -H "Accept: application/json" "${PLEX_BASE}/library/sections" 2>/dev/null || true)
+
+  if echo "$existing_libs" | grep -q '"type":"movie"'; then
+    skip "Plex Movies library already exists"
+  else
+    result=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+      "${PLEX_BASE}/library/sections?name=Movies&type=movie&agent=tv.plex.agents.movie&scanner=Plex+Movie&language=en-US&location=/media/movies" \
+      -H "X-Plex-Token: $PLEX_TOKEN" 2>/dev/null || true)
+    [[ "$result" == "200" || "$result" == "201" ]] \
+      && ok "Plex Movies library created (→ /media/movies)" \
+      || warn "Plex Movies library creation failed (HTTP $result) — create it manually in Plex"
+  fi
+
+  if echo "$existing_libs" | grep -q '"type":"show"'; then
+    skip "Plex TV Shows library already exists"
+  else
+    result=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+      "${PLEX_BASE}/library/sections?name=TV+Shows&type=show&agent=tv.plex.agents.series&scanner=Plex+TV+Series&language=en-US&location=/media/tv" \
+      -H "X-Plex-Token: $PLEX_TOKEN" 2>/dev/null || true)
+    [[ "$result" == "200" || "$result" == "201" ]] \
+      && ok "Plex TV Shows library created (→ /media/tv)" \
+      || warn "Plex TV Shows library creation failed (HTTP $result) — create it manually in Plex"
+  fi
+fi
+
+# ─── Step 12: Restart Trakt containers ───────────────────────────────────────
 if $USE_TRAKT; then
   header "Restarting Trakt containers with updated API keys"
   cd "${SCRIPT_DIR}"
@@ -499,15 +955,30 @@ if $USE_TRAKT; then
     || warn "Could not restart Trakt containers (may not be running yet)"
 fi
 
+# ─── Step 13: Trakt watchlist sync OAuth ─────────────────────────────────────
+if $USE_TRAKT; then
+  SYNC_TOKEN="${SCRIPT_DIR}/config/trakt-watchlist-sync/trakt_tokens.json"
+  if [[ -f "$SYNC_TOKEN" ]]; then
+    skip "Trakt watchlist sync already authenticated"
+  else
+    header "Authenticating Trakt watchlist sync"
+    echo ""
+    echo -e "  ${YELLOW}Action required: a URL and code will appear below.${RESET}"
+    echo -e "  ${YELLOW}Open the URL in your browser, enter the code, then come back.${RESET}"
+    echo ""
+    cd "${SCRIPT_DIR}"
+    eval "$COMPOSE_CMD run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup" \
+      && ok "Trakt watchlist sync authenticated — token saved" \
+      || warn "Watchlist sync auth failed — re-run: $COMPOSE_CMD run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup"
+
+    # Restart so the running container picks up the new token
+    eval "$COMPOSE_CMD restart trakt-watchlist-sync" 2>/dev/null || true
+  fi
+fi
+
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}Auto-configuration complete.${RESET}"
 echo ""
 echo "Remaining manual steps are in TODO.md"
-if $USE_TRAKT; then
-  echo ""
-  echo -e "  ${YELLOW}Trakt OAuth still needed:${RESET}"
-  COMPOSE_FILES_DISPLAY=$(grep 'docker compose' "${SCRIPT_DIR}/start.sh" | head -1 | sed 's/ up -d.*//' | sed "s|cd.*&&||" | xargs)
-  echo "  $COMPOSE_FILES_DISPLAY run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup"
-fi
 echo ""

@@ -172,6 +172,15 @@ if yes_no "Give Plex a dedicated LAN IP (macvlan)?"; then
   PLEX_LAN_GATEWAY=$(prompt PLEX_LAN_GATEWAY "Router/gateway IP" "192.168.1.1")
 fi
 
+# ─── Bazarr ──────────────────────────────────────────────────────────────────
+header "Subtitles"
+echo "Bazarr automatically downloads subtitles for your movies and TV shows."
+
+USE_BAZARR=false
+if yes_no "Enable Bazarr (automatic subtitles)?" "y"; then
+  USE_BAZARR=true
+fi
+
 # ─── Radarr/Sonarr root folders ──────────────────────────────────────────────
 header "Media Root Folders"
 echo "These are the paths INSIDE containers where Radarr/Sonarr store media."
@@ -234,6 +243,7 @@ $USE_USENET  && COMPOSE_FILES="$COMPOSE_FILES -f compose/usenet.yml"
 $USE_VPN     && COMPOSE_FILES="$COMPOSE_FILES -f compose/vpn.yml"
 $USE_TRAKT   && COMPOSE_FILES="$COMPOSE_FILES -f compose/trakt.yml"
 $USE_MACVLAN && COMPOSE_FILES="$COMPOSE_FILES -f compose/macvlan.yml"
+$USE_BAZARR  && COMPOSE_FILES="$COMPOSE_FILES -f compose/bazarr.yml"
 
 VPN_CHECK=""
 if $USE_VPN; then
@@ -269,10 +279,11 @@ ok "start.sh written: docker compose ${COMPOSE_FILES} up -d"
 # ─── Create config directories ───────────────────────────────────────────────
 header "Creating config directories"
 
-DIRS="plex radarr sonarr prowlarr tautulli/config tautulli/scripts bazarr fetcharr trakt-watchlist-sync"
+DIRS="plex radarr sonarr prowlarr tautulli/config tautulli/scripts fetcharr trakt-watchlist-sync"
 $USE_TORRENT && DIRS="$DIRS deluge"
 $USE_USENET  && DIRS="$DIRS sabnzbd"
 $USE_VPN     && DIRS="$DIRS gluetun"
+$USE_BAZARR  && DIRS="$DIRS bazarr"
 
 for d in $DIRS; do
   mkdir -p "${SCRIPT_DIR}/config/$d"
@@ -344,6 +355,13 @@ cat >> "$TODO" <<EOF
 EOF
 fi
 
+cat >> "$TODO" <<EOF
+- [ ] Write Fetcharr config with Plex token + API keys <!-- auto:fetcharr-config -->
+- [ ] Copy and configure Tautulli scripts <!-- auto:tautulli-scripts -->
+- [ ] Create Tautulli notification agent: Trakt Scrobbler <!-- auto:tautulli-scrobbler -->
+- [ ] Create Tautulli notification agent: Progressive Downloader <!-- auto:tautulli-downloader -->
+EOF
+
 if $USE_TRAKT; then
 cat >> "$TODO" <<EOF
 - [ ] Restart Trakt containers with updated API keys <!-- auto:trakt-restart -->
@@ -360,44 +378,75 @@ cat >> "$TODO" <<EOF
 - [ ] Open http://localhost:9696 → Indexers → Add Indexer
       Add your torrent/usenet indexers here.
       They sync automatically to Radarr and Sonarr — no manual setup needed there.
+EOF
+
+if $USE_USENET; then
+cat >> "$TODO" <<EOF
+
+### SABnzbd — add news server
+- [ ] Open http://localhost:8085 → Config → Servers → Add Server
+      Enter your Usenet provider credentials (host, port, username, password, SSL).
+EOF
+fi
+
+cat >> "$TODO" <<EOF
+
+### Radarr/Sonarr — quality profiles
+- [ ] If you want a specific quality (e.g. \`1080p\`, \`4K\`), set it in Radarr/Sonarr:
+      Settings → Profiles → create or edit a profile
+- [ ] Then update \`.env\` to match:
+      \`RADARR_QUALITY_PROFILE=1080p\`
+      \`SONARR_QUALITY_PROFILE=1080p\`
+      Re-run \`./configure.sh\` so Fetcharr picks up the new profile name.
 
 ### Plex — create media libraries
 - [ ] Open Plex at http://$(${USE_MACVLAN} && echo "${PLEX_LAN_IP}" || echo "localhost"):32400
 - [ ] Add movie library → folder: \`/media/movies\`
 - [ ] Add TV library → folder: \`/media/tv\`
 
-### Fetcharr — Plex watchlist sync
-- [ ] Open http://localhost:8080 and authenticate with your Plex account
-      This enables adding to your Plex watchlist → auto-downloads via Radarr/Sonarr.
+### Tautulli — scrobbler OAuth
+- [ ] Run to authenticate the Trakt scrobbler:
+      \`docker exec -it tautulli python /scripts/trakt_scrobbler.py --setup\`
+      Follow the OAuth flow. Token saves to \`/scripts/trakt_tokens.json\` inside the container.
+EOF
+
+if $USE_TRAKT; then
+cat >> "$TODO" <<EOF
+
+### Trakt — watchlist sync OAuth
+- [ ] Run: \`docker compose ${COMPOSE_FILES} run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup\`
+      Visit the URL shown, enter the code, authorize. Then restart: \`./stop.sh && ./start.sh\`
+
+### Trakt — cleanup webhooks
+- [ ] Radarr → Settings → Connect → Add → Webhook
+      URL: \`http://trakt-watchlist-cleanup:5000/radarr\`  Trigger: On Movie Delete
+- [ ] Sonarr → Settings → Connect → Add → Webhook
+      URL: \`http://trakt-watchlist-cleanup:5000/sonarr\`  Trigger: On Series Delete
+EOF
+fi
+
+if $USE_BAZARR; then
+cat >> "$TODO" <<EOF
 
 ### Bazarr — subtitle providers
 - [ ] Open http://localhost:6767 → Settings → Providers → add your subtitle sources
       (OpenSubtitles, Subscene, etc.)
 - [ ] Settings → Languages → set your preferred language profile
 EOF
-
-if $USE_TRAKT; then
-cat >> "$TODO" <<EOF
-
-### Trakt — OAuth authentication
-- [ ] Run: \`docker compose ${COMPOSE_FILES} run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup\`
-      Visit the URL shown, enter the code, authorize. Then restart: \`./stop.sh && ./start.sh\`
-- [ ] Configure Radarr webhook → Settings → Connect → Webhook
-      URL: \`http://trakt-watchlist-cleanup:5000/radarr\`  Trigger: On Movie Delete
-- [ ] Configure Sonarr webhook → Settings → Connect → Webhook
-      URL: \`http://trakt-watchlist-cleanup:5000/sonarr\`  Trigger: On Series Delete
-EOF
 fi
 
-cat >> "$TODO" <<EOF
+PLEX_URL="http://$(${USE_MACVLAN} && echo "${PLEX_LAN_IP}" || echo "localhost"):32400"
+BAZARR_ROW=""
+$USE_BAZARR && BAZARR_ROW="
+| Bazarr | http://localhost:6767 |"
+DELUGE_ROW=""
+$USE_TORRENT && DELUGE_ROW="
+| Deluge | http://localhost:8112 |"
+SABNZBD_ROW=""
+$USE_USENET && SABNZBD_ROW="
+| SABnzbd | http://localhost:8085 |"
 
-### Tautulli scripts — Trakt scrobbling + smart episode downloads
-- [ ] Copy scripts: \`cp tautulliScripts/*.py config/tautulli/scripts/\`
-- [ ] Edit \`config/tautulli/scripts/trakt_scrobbler.py\` → update \`TRAKT_CLIENT_ID\`, \`TRAKT_CLIENT_SECRET\`, \`TAUTULLI_API_KEY\`
-- [ ] Edit \`config/tautulli/scripts/plex_progressive_downloader.py\` → update \`SONARR_APIKEY\`
-- [ ] Authenticate scrobbler: \`docker exec -it tautulli python /scripts/trakt_scrobbler.py --setup\`
-- [ ] Add scrobbler notification agent in Tautulli (triggers: Start/Stop/Pause/Resume) — see SETUP.md
-- [ ] Add progressive downloader notification agent (trigger: Playback Start, episodes only) — see SETUP.md
+cat >> "$TODO" <<EOF
 
 ---
 
@@ -405,15 +454,11 @@ cat >> "$TODO" <<EOF
 
 | Service | URL |
 |---|---|
-| Plex | http://$(${USE_MACVLAN} && echo "${PLEX_LAN_IP}" || echo "localhost"):32400 |
+| Plex | ${PLEX_URL} |
 | Radarr | http://localhost:7878 |
 | Sonarr | http://localhost:8989 |
 | Prowlarr | http://localhost:9696 |
-| Tautulli | http://localhost:8181 |
-| Bazarr | http://localhost:6767 |
-| Fetcharr | http://localhost:8080 |$(${USE_TORRENT} && echo "
-| Deluge | http://localhost:8112 |" || true)$(${USE_USENET} && echo "
-| SABnzbd | http://localhost:8085 |" || true)
+| Tautulli | http://localhost:8181 |${BAZARR_ROW}${DELUGE_ROW}${SABNZBD_ROW}
 
 \`\`\`
 ./start.sh            # start everything

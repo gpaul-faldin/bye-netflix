@@ -93,7 +93,8 @@ arr_post()      { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: applicati
 arr_post_plain() { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3" "$1"; }
 
 # Check if a name already exists in a JSON array response
-already_exists() { echo "$1" | grep -q "\"name\":\"$2\""; }
+# Strip whitespace first — API responses use "name": "value" (with spaces)
+already_exists() { echo "$1" | tr -d ' \t\n\r' | grep -q "\"name\":\"$2\""; }
 
 # Probe which container URL Radarr can actually use to reach a service
 probe_url_from_radarr() {
@@ -173,7 +174,7 @@ RADARR_FOLDER="${RADARR_ROOT_FOLDER:-/media/movies}"
 SONARR_FOLDER="${SONARR_ROOT_FOLDER:-/media/tv}"
 
 existing_radarr_folders=$(arr_get "${RADARR_BASE}/api/v3/rootFolder" "$RADARR_KEY")
-if echo "$existing_radarr_folders" | grep -q "\"path\":\"${RADARR_FOLDER}\""; then
+if echo "$existing_radarr_folders" | tr -d ' \t\n\r' | grep -q "\"path\":\"${RADARR_FOLDER}\""; then
   skip "Radarr root folder already set to ${RADARR_FOLDER}"
 else
   result=$(arr_post "${RADARR_BASE}/api/v3/rootFolder" "$RADARR_KEY" "{\"path\":\"${RADARR_FOLDER}\"}")
@@ -182,7 +183,7 @@ else
 fi
 
 existing_sonarr_folders=$(arr_get "${SONARR_BASE}/api/v3/rootFolder" "$SONARR_KEY")
-if echo "$existing_sonarr_folders" | grep -q "\"path\":\"${SONARR_FOLDER}\""; then
+if echo "$existing_sonarr_folders" | tr -d ' \t\n\r' | grep -q "\"path\":\"${SONARR_FOLDER}\""; then
   skip "Sonarr root folder already set to ${SONARR_FOLDER}"
 else
   result=$(arr_post "${SONARR_BASE}/api/v3/rootFolder" "$SONARR_KEY" "{\"path\":\"${SONARR_FOLDER}\"}")
@@ -384,19 +385,36 @@ if $USE_USENET; then
     fi
 
     # Point download dirs to /downloads (mounted from DOWNLOADS_DIR), not /config
-    for key_val in "download_dir=/downloads/incomplete" "complete_dir=/downloads/complete"; do
-      key="${key_val%%=*}"; val="${key_val#*=}"
-      current=$(grep "^${key}" "$SABNZBD_INI" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d ' ' || true)
-      if [[ "$current" != "$val" ]]; then
-        if grep -q "^${key}" "$SABNZBD_INI"; then
-          sed -i "s|^${key}\s*=.*|${key} = ${val}|" "$SABNZBD_INI"
-        else
-          sed -i "/^\[misc\]/a ${key} = ${val}" "$SABNZBD_INI"
-        fi
-        ok "SABnzbd ${key} → ${val}"
-        ini_needs_restart=true
-      fi
-    done
+    sab_dirs_result=$(python3 - "$SABNZBD_INI" << 'PYEOF'
+import sys, re
+ini_path = sys.argv[1]
+with open(ini_path) as f:
+    content = f.read()
+targets = [('download_dir', '/downloads/incomplete'), ('complete_dir', '/downloads/complete')]
+changes = []
+for key, val in targets:
+    m = re.search(rf'^{re.escape(key)}\s*=\s*(.*)$', content, re.MULTILINE)
+    current = m.group(1).strip() if m else ''
+    if current != val:
+        if m:
+            content = re.sub(rf'^{re.escape(key)}\s*=.*$', f'{key} = {val}', content, flags=re.MULTILINE)
+        else:
+            content = re.sub(r'(\[misc\])', rf'\1\n{key} = {val}', content, count=1)
+        changes.append(key)
+if changes:
+    with open(ini_path, 'w') as f:
+        f.write(content)
+    print('UPDATED:' + ','.join(changes))
+else:
+    print('ALREADY_OK')
+PYEOF
+    )
+    if [[ "$sab_dirs_result" == UPDATED:* ]]; then
+      ok "SABnzbd download paths set: ${sab_dirs_result#UPDATED:}"
+      ini_needs_restart=true
+    else
+      skip "SABnzbd download paths already correct"
+    fi
 
     # Ensure movies and tv categories exist in sabnzbd.ini
     cat_result=$(python3 - "$SABNZBD_INI" << 'PYEOF'
@@ -494,7 +512,7 @@ fi
 # ─── Step 7: Configure Fetcharr ──────────────────────────────────────────────
 header "Configuring Fetcharr"
 
-PLEX_PREFS="${SCRIPT_DIR}/config/plex/Preferences.xml"
+PLEX_PREFS="${SCRIPT_DIR}/config/plex/Library/Application Support/Plex Media Server/Preferences.xml"
 FETCHARR_CFG="${SCRIPT_DIR}/config/fetcharr/fetcharr.yaml"
 PLEX_TOKEN=""
 
@@ -556,7 +574,7 @@ else
   # ── Tautulli API key (re-read if not already set from Step 2) ─────────────
   TAUTULLI_INI="${SCRIPT_DIR}/config/tautulli/config/config.ini"
   if [[ -z "${TAUTULLI_KEY:-}" ]]; then
-    wait_for_file "$TAUTULLI_INI" "Tautulli config" \
+    wait_for_file "$TAUTULLI_INI" "Tautulli" \
       && TAUTULLI_KEY=$(grep -A30 '^\[General\]' "$TAUTULLI_INI" | grep 'api_key' \
            | head -1 | cut -d'=' -f2 | tr -d ' "' || true) \
       || true
@@ -661,12 +679,11 @@ try:
     if "Trakt Scrobbler" not in existing:
         r   = tapi(cmd="add_notifier", agent_id=12)
         nid = r["response"]["data"]["notifier_id"]
-        cfg = json.dumps({"script_folder": "/scripts",
-                          "script_file":   "trakt_scrobbler.py",
-                          "script_timeout": 30})
         tapi(cmd="set_notifier", notifier_id=nid, agent_id=12,
              friendly_name="Trakt Scrobbler",
-             config=cfg,
+             script_folder="/scripts",
+             script_file="trakt_scrobbler.py",
+             script_timeout=30,
              on_play=1, on_stop=1, on_pause=1, on_resume=1,
              on_play_subject=SCROBBLER_ARGS,
              on_stop_subject=SCROBBLER_ARGS,
@@ -679,15 +696,15 @@ try:
     if "Progressive Downloader" not in existing:
         r   = tapi(cmd="add_notifier", agent_id=12)
         nid = r["response"]["data"]["notifier_id"]
-        cfg = json.dumps({"script_folder": "/scripts",
-                          "script_file":   "plex_progressive_downloader.py",
-                          "script_timeout": 30})
         cond = json.dumps([[{"parameter": "media_type",
                              "operator":  "is",
                              "value":     ["episode"]}]])
         tapi(cmd="set_notifier", notifier_id=nid, agent_id=12,
              friendly_name="Progressive Downloader",
-             config=cfg, conditions=cond,
+             script_folder="/scripts",
+             script_file="plex_progressive_downloader.py",
+             script_timeout=30,
+             conditions=cond,
              on_play=1,
              on_play_subject=DOWNLOADER_ARGS)
         results.append("DOWNLOADER_OK")

@@ -368,8 +368,9 @@ if $USE_USENET; then
   if [[ ! -f "$SABNZBD_INI" ]]; then
     warn "SABnzbd config not found — is SABnzbd running? Skipping."
   else
-    # SABnzbd rejects connections whose Host header isn't whitelisted.
-    # Patch the INI to allow the 'sabnzbd' Docker hostname, then restart.
+    # Patch sabnzbd.ini: hostname whitelist + correct download paths
+    ini_needs_restart=false
+
     if ! grep -q 'host_whitelist' "$SABNZBD_INI" || \
        ! grep 'host_whitelist' "$SABNZBD_INI" | grep -q 'sabnzbd'; then
       if grep -q '^host_whitelist' "$SABNZBD_INI"; then
@@ -378,7 +379,23 @@ if $USE_USENET; then
         sed -i "/^\[misc\]/a host_whitelist = sabnzbd, localhost" "$SABNZBD_INI"
       fi
       ok "SABnzbd host_whitelist patched"
+      ini_needs_restart=true
     fi
+
+    # Point download dirs to /downloads (mounted from DOWNLOADS_DIR), not /config
+    for key_val in "download_dir=/downloads/incomplete" "complete_dir=/downloads/complete"; do
+      key="${key_val%%=*}"; val="${key_val#*=}"
+      current=$(grep "^${key}" "$SABNZBD_INI" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d ' ' || true)
+      if [[ "$current" != "$val" ]]; then
+        if grep -q "^${key}" "$SABNZBD_INI"; then
+          sed -i "s|^${key}\s*=.*|${key} = ${val}|" "$SABNZBD_INI"
+        else
+          sed -i "/^\[misc\]/a ${key} = ${val}" "$SABNZBD_INI"
+        fi
+        ok "SABnzbd ${key} → ${val}"
+        ini_needs_restart=true
+      fi
+    done
 
     # Ensure movies and tv categories exist in sabnzbd.ini
     cat_result=$(python3 - "$SABNZBD_INI" << 'PYEOF'
@@ -413,9 +430,11 @@ PYEOF
     [[ "$cat_result" == "UPDATED" ]] && ok "SABnzbd categories added: movies, tv" \
       || skip "SABnzbd categories already present"
 
-    ok "Restarting SABnzbd..."
-    docker restart sabnzbd >/dev/null
-    sleep 8
+    if $ini_needs_restart; then
+      ok "Restarting SABnzbd to apply config changes..."
+      docker restart sabnzbd >/dev/null
+      sleep 8
+    fi
 
     SABNZBD_KEY=$(grep '^api_key' "$SABNZBD_INI" | head -1 | cut -d'=' -f2 | tr -d ' "' || true)
     if [[ -z "$SABNZBD_KEY" ]]; then

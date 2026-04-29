@@ -33,13 +33,13 @@ class TraktWatchlistSync:
         # Radarr Configuration
         self.radarr_url = os.getenv('RADARR_URL', 'http://radarr:7878')
         self.radarr_api_key = os.getenv('RADARR_API_KEY')
-        self.radarr_root_folder = os.getenv('RADARR_ROOT_FOLDER', '/srv/movies/')
+        self.radarr_root_folder = os.getenv('RADARR_ROOT_FOLDER', '/media/movies')
         self.radarr_quality_profile = os.getenv('RADARR_QUALITY_PROFILE', 'Any')
-        
+
         # Sonarr Configuration
         self.sonarr_url = os.getenv('SONARR_URL', 'http://sonarr:8989')
         self.sonarr_api_key = os.getenv('SONARR_API_KEY')
-        self.sonarr_root_folder = os.getenv('SONARR_ROOT_FOLDER', '/srv/tv/')
+        self.sonarr_root_folder = os.getenv('SONARR_ROOT_FOLDER', '/media/tv')
         self.sonarr_quality_profile = os.getenv('SONARR_QUALITY_PROFILE', 'Any')
         
         # Sync Configuration

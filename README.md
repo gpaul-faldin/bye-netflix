@@ -25,7 +25,7 @@ git clone <repo> bye-netflix && cd bye-netflix
                                      Prowlarr (indexers, VPN)
                                           │
                                     Media Library
-                                    /media  /storage
+                                    /media
                                           │
                                         Plex
                                     Tautulli  Bazarr

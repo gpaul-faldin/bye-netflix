@@ -24,7 +24,7 @@ import argparse
 import json
 
 # ## CONFIGURATION - EDIT THESE SETTINGS ##
-SONARR_APIKEY = '7d577808c2c94fabb298ca5ed82fbadc'  # Your Sonarr API key (Settings > General > Security)
+SONARR_APIKEY = ''  # Your Sonarr API key (Settings > General > Security)
 SONARR_URL = 'http://sonarr:8989'   # Your Sonarr URL (e.g., http://192.168.1.100:8989)
 EPISODE_BUFFER = 3                      # Number of episodes to download if full season not available
 HALFWAY_THRESHOLD = 0.5                 # Download next season when 50% through current season (0.5 = 50%)

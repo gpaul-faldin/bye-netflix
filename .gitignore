@@ -1,2 +1,5 @@
 config/*
 .env
+start.sh
+stop.sh
+TODO.md

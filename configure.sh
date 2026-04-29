@@ -601,6 +601,9 @@ else
     ok "plex_progressive_downloader.py → config/tautulli/scripts/ (credentials patched)"
   fi
 
+  # ──Install dep ───────────────────────────
+  docker exec tautulli pip install requests -q
+
   todo_done "tautulli-scripts"
 
   # ── Trakt scrobbler OAuth ─────────────────────────────────────────────────
@@ -614,7 +617,7 @@ else
       echo -e "  ${YELLOW}Action required: a URL and code will appear below.${RESET}"
       echo -e "  ${YELLOW}Open the URL in your browser, enter the code, then come back.${RESET}"
       echo ""
-      docker exec tautulli python /scripts/trakt_scrobbler.py --setup \
+      docker exec -w /scripts tautulli python /scripts/trakt_scrobbler.py --setup \
         && ok "Trakt scrobbler authenticated — token saved" \
         || warn "Scrobbler auth failed — re-run: docker exec tautulli python /scripts/trakt_scrobbler.py --setup"
     fi

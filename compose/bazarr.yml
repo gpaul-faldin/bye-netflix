@@ -1,0 +1,31 @@
+
+# Bazarr module — automatic subtitle downloads.
+#
+# Usage: docker compose -f docker-compose.yml -f compose/bazarr.yml up -d
+
+services:
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/bazarr:/config
+      - ${MEDIA_DIR}:/media
+    ports:
+      - "6767:6767"
+    networks:
+      - media-network
+    depends_on:
+      - radarr
+      - sonarr
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+

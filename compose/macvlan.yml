@@ -1,0 +1,34 @@
+
+# macvlan module — gives Plex a dedicated LAN IP.
+#
+# This makes Plex appear as a real device on your network, which improves
+# LAN streaming reliability and avoids Docker NAT for local clients.
+#
+# Requires:
+#   - PLEX_LAN_IP        — unused IP on your LAN (e.g. 192.168.1.100)
+#   - PLEX_LAN_INTERFACE — host network interface (find with: ip link show)
+#   - PLEX_LAN_SUBNET    — your LAN subnet (e.g. 192.168.1.0/24)
+#   - PLEX_LAN_GATEWAY   — your router IP (e.g. 192.168.1.1)
+#
+# Note: the host machine itself cannot reach the macvlan IP directly.
+# Access Plex from other devices on the LAN, or add a macvlan shim on the host.
+#
+# Usage: docker compose -f docker-compose.yml -f compose/macvlan.yml up -d
+
+services:
+
+  plex:
+    networks:
+      plex-lan:
+        ipv4_address: ${PLEX_LAN_IP}
+
+networks:
+  plex-lan:
+    driver: macvlan
+    driver_opts:
+      parent: ${PLEX_LAN_INTERFACE}
+    ipam:
+      config:
+        - subnet: ${PLEX_LAN_SUBNET}
+          gateway: ${PLEX_LAN_GATEWAY}
+          ip_range: ${PLEX_LAN_IP}/32

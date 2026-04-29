@@ -1,0 +1,6 @@
+config/*
+.env
+start.sh
+stop.sh
+TODO.md
+docker-compose\ DONT_TOUCH.yml

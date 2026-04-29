@@ -1,0 +1,70 @@
+
+# Trakt module — watchlist sync and cleanup.
+#
+# Sync:    polls your Trakt watchlist every 20s and adds items to Radarr/Sonarr.
+# Cleanup: webhook receiver that removes items from Trakt when deleted in Radarr/Sonarr.
+#
+# Requires:
+#   - TRAKT_CLIENT_ID and TRAKT_CLIENT_SECRET in .env
+#   - RADARR_API_KEY and SONARR_API_KEY in .env
+#   - OAuth setup: docker compose run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup
+#   - Radarr webhook → http://trakt-watchlist-cleanup:5000/radarr  (On Movie Delete)
+#   - Sonarr webhook → http://trakt-watchlist-cleanup:5000/sonarr  (On Series Delete)
+#
+# Usage: docker compose -f docker-compose.yml -f compose/trakt.yml up -d
+
+services:
+
+  trakt-watchlist-sync:
+    build:
+      context: ./trakt-watchlist-sync
+      dockerfile: Dockerfile.sync
+    container_name: trakt-watchlist-sync
+    environment:
+      - TZ=${TZ:-UTC}
+      - TRAKT_CLIENT_ID=${TRAKT_CLIENT_ID}
+      - TRAKT_CLIENT_SECRET=${TRAKT_CLIENT_SECRET}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - RADARR_ROOT_FOLDER=${RADARR_ROOT_FOLDER:-/media/movies}
+      - RADARR_QUALITY_PROFILE=${RADARR_QUALITY_PROFILE:-Any}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - SONARR_ROOT_FOLDER=${SONARR_ROOT_FOLDER:-/media/tv}
+      - SONARR_QUALITY_PROFILE=${SONARR_QUALITY_PROFILE:-Any}
+      - POLL_INTERVAL=20
+    volumes:
+      - ./config/trakt-watchlist-sync:/config
+    networks:
+      - media-network
+    depends_on:
+      - radarr
+      - sonarr
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  trakt-watchlist-cleanup:
+    build:
+      context: ./trakt-watchlist-sync
+      dockerfile: Dockerfile.cleanup
+    container_name: trakt-watchlist-cleanup
+    environment:
+      - TZ=${TZ:-UTC}
+      - TRAKT_CLIENT_ID=${TRAKT_CLIENT_ID}
+      - TRAKT_CLIENT_SECRET=${TRAKT_CLIENT_SECRET}
+    volumes:
+      - ./config/trakt-watchlist-sync:/config
+    ports:
+      - "5000:5000"
+    networks:
+      - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

@@ -1,0 +1,131 @@
+
+# Base stack — always runs.
+# Start with overlay files for optional modules:
+#   docker-compose.torrent.yml   → Deluge torrent client
+#   docker-compose.usenet.yml    → SABnzbd usenet client
+#   docker-compose.vpn.yml       → Gluetun VPN (routes torrent traffic + Prowlarr)
+#   docker-compose.trakt.yml     → Trakt watchlist sync & cleanup
+#   docker-compose.macvlan.yml   → Give Plex a dedicated LAN IP
+#
+# Use setup.sh to generate your .env and start.sh automatically.
+
+services:
+
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - VERSION=docker
+      - PLEX_CLAIM=${PLEX_CLAIM}
+    volumes:
+      - ./config/plex:/config
+      - ${MEDIA_DIR}:/media
+    ports:
+      - "32400:32400"
+    networks:
+      - media-network
+    logging: &default-logging
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/radarr:/config
+      - ${MEDIA_DIR}:/media
+      - ${DOWNLOADS_DIR}:/downloads
+    ports:
+      - "7878:7878"
+    networks:
+      - media-network
+    depends_on:
+      - prowlarr
+    logging: *default-logging
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/sonarr:/config
+      - ${MEDIA_DIR}:/media
+      - ${DOWNLOADS_DIR}:/downloads
+    ports:
+      - "8989:8989"
+    networks:
+      - media-network
+    depends_on:
+      - prowlarr
+    logging: *default-logging
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    networks:
+      - media-network
+    logging: *default-logging
+    restart: unless-stopped
+
+  tautulli:
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/tautulli/config:/config
+      - ./config/tautulli/scripts:/scripts
+    ports:
+      - "8181:8181"
+    networks:
+      - media-network
+    depends_on:
+      - plex
+    logging: *default-logging
+    restart: unless-stopped
+
+  fetcharr:
+    image: ghcr.io/fetcharr/fetcharr:latest
+    container_name: fetcharr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./config/fetcharr:/config
+    networks:
+      - media-network
+    depends_on:
+      - sonarr
+      - radarr
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  media-network:
+    driver: bridge

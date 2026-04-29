@@ -1,0 +1,28 @@
+
+# Usenet module — adds SABnzbd.
+#
+# Usage: docker compose -f docker-compose.yml -f compose/usenet.yml up -d
+
+services:
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - HAS_IPV6=false
+    volumes:
+      - ./config/sabnzbd:/config
+      - ${DOWNLOADS_DIR}:/downloads
+    ports:
+      - "8085:8080"
+    networks:
+      - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

@@ -1,0 +1,103 @@
+
+# VPN module — adds Gluetun and moves Deluge + Prowlarr behind it.
+# Must be loaded AFTER compose/torrent.yml when using torrents.
+#
+# Supported VPN providers: AirVPN, Mullvad, ProtonVPN, NordVPN, and more.
+# See: https://github.com/qdm12/gluetun/wiki
+#
+# For AirVPN (default): place your .ovpn file at config/gluetun/<filename>
+# and update OPENVPN_CUSTOM_CONFIG below.
+#
+# Usage: docker compose -f docker-compose.yml -f compose/torrent.yml -f compose/vpn.yml up -d
+
+services:
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=openvpn
+      # Path inside the container — place your .ovpn file in config/gluetun/
+      - OPENVPN_CUSTOM_CONFIG=/gluetun/vpn.ovpn
+      - TZ=${TZ:-UTC}
+      - FIREWALL_OUTBOUND_SUBNETS=${VPN_FIREWALL_SUBNETS:-172.18.0.0/16,172.19.0.0/16,192.168.1.0/24}
+      - FIREWALL_VPN_INPUT_PORTS=${VPN_FORWARDED_PORT}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - DOT=off
+    volumes:
+      - ./config/gluetun:/gluetun
+    ports:
+      - "8112:8112"                        # Deluge WebUI
+      - "58846:58846"                      # Deluge daemon
+      - "8191:8191"                        # FlareSolverr
+      - "9696:9696"                        # Prowlarr
+      - "${VPN_FORWARDED_PORT}:${VPN_FORWARDED_PORT}"
+      - "${VPN_FORWARDED_PORT}:${VPN_FORWARDED_PORT}/udp"
+    networks:
+      - media-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Reroute Deluge through the VPN container's network stack.
+  # This overrides the media-network assignment from compose/torrent.yml.
+  deluge:
+    network_mode: "service:gluetun"
+    networks: !reset null
+    ports: !reset []
+    depends_on:
+      - gluetun
+
+  # Reroute Prowlarr through VPN so indexers see the VPN IP.
+  prowlarr:
+    network_mode: "service:gluetun"
+    networks: !reset null
+    ports: !reset []
+    depends_on:
+      - gluetun
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    network_mode: "service:gluetun"
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TZ:-UTC}
+    depends_on:
+      - gluetun
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Watches Deluge WebUI every 10s and restarts it after 3 consecutive failures.
+  gluetun-watchdog:
+    build:
+      context: ./gluetun-watchdog
+      dockerfile: Dockerfile
+    container_name: gluetun-watchdog
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - media-network
+    depends_on:
+      - gluetun
+      - deluge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

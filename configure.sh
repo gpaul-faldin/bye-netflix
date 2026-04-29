@@ -617,9 +617,9 @@ else
       echo -e "  ${YELLOW}Action required: a URL and code will appear below.${RESET}"
       echo -e "  ${YELLOW}Open the URL in your browser, enter the code, then come back.${RESET}"
       echo ""
-      docker exec -w /scripts tautulli python /scripts/trakt_scrobbler.py --setup \
+      (cd "${SCRIPTS_DEST}" && python3 trakt_scrobbler.py --setup) \
         && ok "Trakt scrobbler authenticated — token saved" \
-        || warn "Scrobbler auth failed — re-run: docker exec tautulli python /scripts/trakt_scrobbler.py --setup"
+        || warn "Scrobbler auth failed — re-run: cd ${SCRIPTS_DEST} && python3 trakt_scrobbler.py --setup"
     fi
   fi
 fi
@@ -667,9 +667,12 @@ def bapi(method, path, body=None):
     req  = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
     try:
         resp = urllib.request.urlopen(req)
-        return resp.status, json.loads(resp.read() or b'{}')
+        raw = resp.read().strip()
+        return resp.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
         return e.code, {}
+    except Exception:
+        return 0, {}
 
 results = []
 

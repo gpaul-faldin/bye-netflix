@@ -216,8 +216,8 @@ device-code prompt. Make sure Tautulli is running before running `configure.sh`.
 
 If re-authentication is ever needed:
 ```bash
-# Scrobbler
-docker exec tautulli python /scripts/trakt_scrobbler.py --setup
+# Scrobbler (run from the project root — must run on the host, not inside Docker)
+cd config/tautulli/scripts && python3 trakt_scrobbler.py --setup && cd -
 
 # Watchlist sync
 docker compose -f docker-compose.yml -f compose/trakt.yml \

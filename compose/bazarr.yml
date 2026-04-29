@@ -29,6 +29,3 @@ services:
         max-file: "3"
     restart: unless-stopped
 
-networks:
-  media-network:
-    external: true

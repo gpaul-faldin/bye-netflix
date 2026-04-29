@@ -1,4 +1,3 @@
-version: '3.8'
 
 # Torrent module — adds Deluge.
 # If also using VPN (compose/vpn.yml), load that AFTER this file.

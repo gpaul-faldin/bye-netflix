@@ -1,4 +1,3 @@
-version: '3.8'
 
 # macvlan module — gives Plex a dedicated LAN IP.
 #

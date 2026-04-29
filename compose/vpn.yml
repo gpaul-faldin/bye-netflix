@@ -1,4 +1,3 @@
-version: '3.8'
 
 # VPN module — adds Gluetun and moves Deluge + Prowlarr behind it.
 # Must be loaded AFTER compose/torrent.yml when using torrents.

@@ -91,7 +91,11 @@ Two Tautulli notification scripts live in `tautulliScripts/`:
 
 **`plex_progressive_downloader.py`** — pre-fetches episodes as you watch. At 50% through a season it downloads the next one. At the last available episode it enables monitoring for all seasons.
 
-`configure.sh` copies both scripts to `config/tautulli/scripts/`, patches all credentials in-place, and creates the Tautulli notification agents automatically. The only manual step is a one-time OAuth login for the scrobbler.
+`configure.sh` copies both scripts to `config/tautulli/scripts/` and patches all credentials in-place. Three manual steps remain:
+
+1. **Connect Tautulli to Plex** — Settings → Plex Media Server, hostname `plex`, port `32400`, Verify Server, Fetch New Token, Save.
+2. **Add notification agents** — two Script agents in Tautulli UI (Trakt Scrobbler + Progressive Downloader). Full walkthrough in SETUP.md.
+3. **Trakt scrobbler OAuth** — `configure.sh` walks you through this interactively once Tautulli is connected to Plex.
 
 ---
 

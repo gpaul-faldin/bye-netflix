@@ -1,4 +1,3 @@
-version: '3.8'
 
 # Trakt module — watchlist sync and cleanup.
 #

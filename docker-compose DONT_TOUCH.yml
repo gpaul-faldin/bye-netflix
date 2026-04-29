@@ -330,11 +330,11 @@ services:
       - TRAKT_CLIENT_SECRET=b278d963bf8e729b6c9d0cb52b1c651c1fb8d08ccd54bd6c0fc92da8df81f263
       - RADARR_URL=http://radarr:7878
       - RADARR_API_KEY=bcdb83d1f0be438eae81fa3274b29e7e
-      - RADARR_ROOT_FOLDER=/srv/movies/
+      - RADARR_ROOT_FOLDER=/storage/movies
       - RADARR_QUALITY_PROFILE=Any
       - SONARR_URL=http://sonarr:8989
       - SONARR_API_KEY=7d577808c2c94fabb298ca5ed82fbadc
-      - SONARR_ROOT_FOLDER=/srv/tv/
+      - SONARR_ROOT_FOLDER=/storage/tv
       - SONARR_QUALITY_PROFILE=Any
       - POLL_INTERVAL=20
     volumes:

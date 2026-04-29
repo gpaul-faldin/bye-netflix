@@ -88,13 +88,12 @@ It is safe to re-run — it checks for existing config before adding anything.
 | Deluge | Enables Labels plugin, creates `radarr`/`sonarr` labels, adds client to Radarr + Sonarr |
 | SABnzbd | Patches hostname whitelist, creates `movies`/`tv` categories, adds client to Radarr + Sonarr |
 | Fetcharr | Reads Plex token from `Preferences.xml`, writes `config/fetcharr/fetcharr.yaml` |
-| Tautulli → Plex | Patches Tautulli config to point at the `plex` container |
 | Tautulli scripts | Copies scripts to `/scripts`, patches all credentials in-place |
-| Tautulli agents | Creates Trakt Scrobbler and Progressive Downloader notification agents |
 | Bazarr | Connects Bazarr to Radarr and Sonarr via Bazarr API |
 | Trakt webhooks | Adds "on delete" webhooks in Radarr and Sonarr → `trakt-watchlist-cleanup` |
 | Plex libraries | Creates Movies (`/media/movies`) and TV Shows (`/media/tv`) libraries |
 | Trakt containers | Restarts with updated API keys |
+| Trakt scrobbler OAuth | Pauses and walks you through device-code login for the scrobbler |
 
 ---
 
@@ -143,10 +142,77 @@ By default everything uses `Any`. To change:
 
 ---
 
+### Tautulli — connect to Plex
+
+Open http://localhost:8181 → Settings → Plex Media Server
+
+1. **Plex IP or Hostname** — type `plex` (the Docker container name, not `localhost`)
+2. **Plex Port** — `32400`
+3. Click **Verify Server** — it should detect your server
+4. Scroll down to **Plex.tv Authentication** → click **Fetch New Token**
+   - A plex.tv login opens — sign in and authorize Tautulli
+5. Click **Save**
+
+> Tautulli defaults to `127.0.0.1` which doesn't resolve across Docker containers.
+> The container name `plex` is required.
+
+---
+
+### Tautulli — add notification agents
+
+Two scripts are placed in `/scripts` by `configure.sh` with credentials already patched in.
+You just need to wire them up in the Tautulli UI.
+
+Open http://localhost:8181 → Settings → Notification Agents → **Add a new notification agent** → **Script**
+
+#### Trakt Scrobbler
+
+| Field | Value |
+|---|---|
+| Script Folder | `/scripts` |
+| Script File | `trakt_scrobbler.py` |
+| Script Timeout | `30` |
+| Description | `Trakt Scrobbler` |
+
+**Triggers** tab — enable: Playback Start, Playback Stop, Playback Pause, Playback Resume
+
+**Arguments** tab — paste the same line for each enabled trigger:
+```
+--action {action} --user {username} --title "{title}" --year {year} --progress {progress_percent} --duration {duration} --show_name "{show_name}" --season_num {season_num} --episode_num {episode_num} --tmdb_id {tmdb_id} --tvdb_id {thetvdb_id} --imdb_id {imdb_id}
+```
+
+Save.
+
+#### Progressive Downloader
+
+| Field | Value |
+|---|---|
+| Script Folder | `/scripts` |
+| Script File | `plex_progressive_downloader.py` |
+| Script Timeout | `30` |
+| Description | `Progressive Downloader` |
+
+**Triggers** tab — enable: Playback Start only
+
+**Conditions** tab — add: `Media Type` `is` `episode`
+
+**Arguments** tab — Playback Start:
+```
+-tvid {thetvdb_id} -sn {season_num} -en {episode_num}
+```
+
+Save.
+
+---
+
 ### Trakt — OAuth flows
 
-`configure.sh` handles both OAuth flows interactively — it pauses, prints a URL and
-device code, and waits while you authorize in your browser. No separate commands needed.
+`configure.sh` handles the **watchlist sync** OAuth interactively — it pauses, prints a
+URL and device code, and waits while you authorize in your browser.
+
+The **scrobbler** OAuth also runs in `configure.sh` — it runs
+`docker exec tautulli python /scripts/trakt_scrobbler.py --setup` which prints the same
+device-code prompt. Make sure Tautulli is running before running `configure.sh`.
 
 If re-authentication is ever needed:
 ```bash

@@ -1,4 +1,3 @@
-version: '3.8'
 
 # Base stack — always runs.
 # Start with overlay files for optional modules:

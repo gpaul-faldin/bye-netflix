@@ -272,73 +272,43 @@ class TraktWatchlistSync:
         except Exception as e:
             logger.error(f"Error getting Sonarr quality profiles: {e}")
             return 1  # Default fallback
-    
-    def get_trakt_watchlist(self) -> List[Dict]:
-        """Fetch watchlist from Trakt"""
-        try:
-            access_token = self.get_valid_token()
-            if not access_token:
-                logger.error("No valid access token available")
-                return []
-            
-            headers = {
-                'Content-Type': 'application/json',
-                'trakt-api-version': '2',
-                'trakt-api-key': self.trakt_client_id,
-                'Authorization': f'Bearer {access_token}'
-            }
-            
-            # Get movies
-            movies_response = requests.get(
-                'https://api.trakt.tv/sync/watchlist/movies',
-                headers=headers
-            )
-            movies_response.raise_for_status()
-            movies = movies_response.json()
-            
-            # Get shows
-            shows_response = requests.get(
-                'https://api.trakt.tv/sync/watchlist/shows',
-                headers=headers
-            )
-            shows_response.raise_for_status()
-            shows = shows_response.json()
-            return movies + shows
-            
-        except Exception as e:
-            logger.error(f"Error fetching Trakt watchlist: {e}")
-            return []
-    
-    def movie_exists_in_radarr(self, tmdb_id: int) -> bool:
-        """Check if movie exists in Radarr"""
+
+    def _get_radarr_root_folder(self) -> str:
+        """Get the first configured root folder directly from Radarr's API.
+        Falls back to the env var value if the API call fails."""
         try:
             response = requests.get(
-                f"{self.radarr_url}/api/v3/movie",
+                f"{self.radarr_url}/api/v3/rootfolder",
                 headers={'X-Api-Key': self.radarr_api_key}
             )
             response.raise_for_status()
-            movies = response.json()
-            
-            return any(movie.get('tmdbId') == tmdb_id for movie in movies)
+            folders = response.json()
+            if folders:
+                path = folders[0]['path']
+                logger.info(f"Using Radarr root folder from API: {path}")
+                return path
         except Exception as e:
-            logger.error(f"Error checking Radarr for movie: {e}")
-            return False
-    
-    def show_exists_in_sonarr(self, tvdb_id: int) -> bool:
-        """Check if show exists in Sonarr"""
+            logger.error(f"Error fetching Radarr root folders, falling back to env var: {e}")
+        return self.radarr_root_folder
+
+    def _get_sonarr_root_folder(self) -> str:
+        """Get the first configured root folder directly from Sonarr's API.
+        Falls back to the env var value if the API call fails."""
         try:
             response = requests.get(
-                f"{self.sonarr_url}/api/v3/series",
+                f"{self.sonarr_url}/api/v3/rootfolder",
                 headers={'X-Api-Key': self.sonarr_api_key}
             )
             response.raise_for_status()
-            series = response.json()
-            
-            return any(show.get('tvdbId') == tvdb_id for show in series)
+            folders = response.json()
+            if folders:
+                path = folders[0]['path']
+                logger.info(f"Using Sonarr root folder from API: {path}")
+                return path
         except Exception as e:
-            logger.error(f"Error checking Sonarr for show: {e}")
-            return False
-    
+            logger.error(f"Error fetching Sonarr root folders, falling back to env var: {e}")
+        return self.sonarr_root_folder
+
     def add_movie_to_radarr(self, movie_data: Dict) -> bool:
         """Add movie to Radarr"""
         try:
@@ -364,6 +334,9 @@ class TraktWatchlistSync:
                 logger.warning(f"Movie not found in Radarr lookup: {title} ({year})")
                 return False
             
+            # Resolve the root folder Radarr actually knows about
+            root_folder = self._get_radarr_root_folder()
+
             # Prepare payload
             payload = {
                 'title': radarr_movie.get('title'),
@@ -372,7 +345,7 @@ class TraktWatchlistSync:
                 'tmdbId': tmdb_id,
                 'images': radarr_movie.get('images', []),
                 'titleSlug': radarr_movie.get('titleSlug'),
-                'rootFolderPath': self.radarr_root_folder,
+                'rootFolderPath': root_folder,
                 'monitored': True,  # MUST be monitored for automatic download
                 'addOptions': {
                     'searchForMovie': True  # Search immediately
@@ -434,7 +407,6 @@ class TraktWatchlistSync:
             season_1_episode_count = season_1.get('statistics', {}).get('episodeCount', 0)
             
             # Determine strategy: download full season if it has episodes
-            # (episodeCount shows total episodes that will exist in the season)
             if season_1_episode_count > 0:
                 logger.info(f"Season 1 has {season_1_episode_count} episodes - will download full season")
                 download_full_season = True
@@ -448,7 +420,10 @@ class TraktWatchlistSync:
                     season['monitored'] = True  # MUST be monitored
                 else:
                     season['monitored'] = False  # Don't monitor other seasons
-            
+
+            # Resolve the root folder Sonarr actually knows about
+            root_folder = self._get_sonarr_root_folder()
+
             # Prepare payload
             payload = {
                 'title': sonarr_show.get('title'),
@@ -457,7 +432,7 @@ class TraktWatchlistSync:
                 'titleSlug': sonarr_show.get('titleSlug'),
                 'images': sonarr_show.get('images', []),
                 'seasons': seasons,
-                'rootFolderPath': self.sonarr_root_folder,
+                'rootFolderPath': root_folder,
                 'monitored': True,  # Series must be monitored
                 'seasonFolder': True,
                 'addOptions': {
@@ -477,10 +452,7 @@ class TraktWatchlistSync:
             # Get series ID
             series_id = result.get('id')
             
-            # Note: searchForMissingEpisodes in addOptions should handle the search,
-            # but we can trigger additional searches if needed
             if series_id and not download_full_season:
-                # For shows without full season info, also trigger manual episode search
                 logger.info(f"Triggering additional episode search for {title}")
                 self._search_first_episodes(series_id, 1, 3)
             
@@ -587,6 +559,72 @@ class TraktWatchlistSync:
                     logger.debug(f"Show already exists in Sonarr: {title}")
                     processed['skipped'] += 1
     
+    def get_trakt_watchlist(self) -> List[Dict]:
+        """Fetch watchlist from Trakt"""
+        try:
+            access_token = self.get_valid_token()
+            if not access_token:
+                logger.error("No valid access token available")
+                return []
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'trakt-api-version': '2',
+                'trakt-api-key': self.trakt_client_id,
+                'Authorization': f'Bearer {access_token}'
+            }
+            
+            # Get movies
+            movies_response = requests.get(
+                'https://api.trakt.tv/sync/watchlist/movies',
+                headers=headers
+            )
+            movies_response.raise_for_status()
+            movies = movies_response.json()
+            
+            # Get shows
+            shows_response = requests.get(
+                'https://api.trakt.tv/sync/watchlist/shows',
+                headers=headers
+            )
+            shows_response.raise_for_status()
+            shows = shows_response.json()
+            return movies + shows
+            
+        except Exception as e:
+            logger.error(f"Error fetching Trakt watchlist: {e}")
+            return []
+    
+    def movie_exists_in_radarr(self, tmdb_id: int) -> bool:
+        """Check if movie exists in Radarr"""
+        try:
+            response = requests.get(
+                f"{self.radarr_url}/api/v3/movie",
+                headers={'X-Api-Key': self.radarr_api_key}
+            )
+            response.raise_for_status()
+            movies = response.json()
+            
+            return any(movie.get('tmdbId') == tmdb_id for movie in movies)
+        except Exception as e:
+            logger.error(f"Error checking Radarr for movie: {e}")
+            return False
+    
+    def show_exists_in_sonarr(self, tvdb_id: int) -> bool:
+        """Check if show exists in Sonarr"""
+        try:
+            response = requests.get(
+                f"{self.sonarr_url}/api/v3/series",
+                headers={'X-Api-Key': self.sonarr_api_key}
+            )
+            response.raise_for_status()
+            series = response.json()
+            
+            return any(show.get('tvdbId') == tvdb_id for show in series)
+        except Exception as e:
+            logger.error(f"Error checking Sonarr for show: {e}")
+            return False
+
     def run(self):
         """Main loop"""
         logger.info("Starting Trakt Watchlist Sync Service...")

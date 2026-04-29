@@ -93,8 +93,7 @@ arr_post()      { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: applicati
 arr_post_plain() { curl -s -X POST -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3" "$1"; }
 
 # Check if a name already exists in a JSON array response
-# Strip whitespace first — API responses use "name": "value" (with spaces)
-already_exists() { echo "$1" | tr -d ' \t\n\r' | grep -q "\"name\":\"$2\""; }
+already_exists() { echo "$1" | grep -q "\"name\": *\"$2\""; }
 
 # Probe which container URL Radarr can actually use to reach a service
 probe_url_from_radarr() {
@@ -234,7 +233,8 @@ else
 JSON
 )
   result=$(arr_post_plain "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
-  echo "$result" | grep -q '"id"' && { ok "Prowlarr → Radarr connected"; todo_done "prowlarr-radarr"; } \
+  echo "$result" | grep -q '"id"'           && { ok "Prowlarr → Radarr connected"; todo_done "prowlarr-radarr"; } \
+    || echo "$result" | grep -q 'Should be unique' && skip "Radarr already connected to Prowlarr" \
     || warn "Prowlarr → Radarr may have failed: $(echo "$result" | head -c 200)"
 fi
 
@@ -261,7 +261,8 @@ else
 JSON
 )
   result=$(arr_post_plain "${PROWLARR_BASE}/api/v1/applications" "$PROWLARR_KEY" "$payload")
-  echo "$result" | grep -q '"id"' && { ok "Prowlarr → Sonarr connected"; todo_done "prowlarr-sonarr"; } \
+  echo "$result" | grep -q '"id"'           && { ok "Prowlarr → Sonarr connected"; todo_done "prowlarr-sonarr"; } \
+    || echo "$result" | grep -q 'Should be unique' && skip "Sonarr already connected to Prowlarr" \
     || warn "Prowlarr → Sonarr may have failed: $(echo "$result" | head -c 200)"
 fi
 
@@ -628,104 +629,83 @@ fi
 if $USE_BAZARR; then
   header "Connecting Bazarr to Radarr and Sonarr"
 
-  # Find Bazarr API key from its config (linuxserver image writes it here)
-  BAZARR_KEY=""
+  # Bazarr stores its connection settings in config.yaml — there are no API
+  # endpoints to configure Sonarr/Radarr, so we edit the file directly.
+  BAZARR_CFG=""
   for cfg in "${SCRIPT_DIR}/config/bazarr/config/config.yaml" \
              "${SCRIPT_DIR}/config/bazarr/data/config.yaml"; do
-    if [[ -f "$cfg" ]]; then
-      BAZARR_KEY=$(grep -oP '(?<=apikey: )\S+' "$cfg" | head -1 || true)
-      [[ -n "$BAZARR_KEY" ]] && break
-    fi
+    [[ -f "$cfg" ]] && { BAZARR_CFG="$cfg"; break; }
   done
 
-  if [[ -z "$BAZARR_KEY" ]]; then
-    warn "Bazarr config not found — is Bazarr running? Skipping."
+  if [[ -z "$BAZARR_CFG" ]]; then
+    wait_for_file "${SCRIPT_DIR}/config/bazarr/config/config.yaml" "Bazarr" \
+      && BAZARR_CFG="${SCRIPT_DIR}/config/bazarr/config/config.yaml"
+  fi
+
+  if [[ -z "$BAZARR_CFG" || ! -f "$BAZARR_CFG" ]]; then
+    warn "Bazarr config.yaml not found — is Bazarr running? Skipping."
   else
-    BAZARR_BASE="http://localhost:6767"
-    ok "Bazarr API key: ${BAZARR_KEY:0:8}..."
-
-    # Wait for Bazarr to be ready
-    echo -n "  Waiting for Bazarr..."
-    for _ in $(seq 1 20); do
-      code=$(curl -s -o /dev/null -w "%{http_code}" \
-        -H "X-API-KEY: $BAZARR_KEY" "${BAZARR_BASE}/api/system/status" 2>/dev/null || true)
-      [[ "$code" == "200" ]] && { echo " ready"; break; }
-      sleep 3; echo -n "."
-    done
-    echo ""
-
     bazarr_result=$(python3 << PYEOF
-import json, urllib.request, urllib.error, sys
+import re, sys
 
-BASE    = "http://localhost:6767/api"
-KEY     = "${BAZARR_KEY}"
-HEADERS = {"X-API-KEY": KEY, "Content-Type": "application/json"}
+cfg_path   = "${BAZARR_CFG}"
+sonarr_key = "${SONARR_KEY}"
+radarr_key = "${RADARR_KEY}"
 
-def bapi(method, path, body=None):
-    url  = BASE + path
-    data = json.dumps(body).encode() if body else None
-    req  = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
-    try:
-        resp = urllib.request.urlopen(req)
-        raw = resp.read().strip()
-        return resp.status, (json.loads(raw) if raw else {})
-    except urllib.error.HTTPError as e:
-        return e.code, {}
-    except Exception:
-        return 0, {}
+with open(cfg_path) as f:
+    content = f.read()
 
-results = []
+def get_val(content, section, key):
+    m = re.search(rf'\n{section}:(?:\n  [^\n]*){{0,30}}\n  {key}:\s*(\S+)', content)
+    return m.group(1) if m else None
 
-# ── Sonarr ──────────────────────────────────────────────────────────────────
-status, current = bapi("GET", "/sonarr")
-if status == 200 and current.get("enabled"):
-    results.append("SONARR_EXISTS")
+def set_val(content, section, key, value):
+    pattern = rf'(\n{section}:(?:\n  [^\n]*){{0,30}}\n  {key}:\s*)(\S+)'
+    new, n = re.subn(pattern, lambda m: m.group(1) + value, content, count=1)
+    if n:
+        return new, True
+    # Section exists but key is missing — insert after section header line
+    pattern = rf'(\n{section}:\n)'
+    new, n = re.subn(pattern, lambda m: m.group(1) + f'  {key}: {value}\n', content, count=1)
+    if n:
+        return new, True
+    # Section missing entirely — append
+    return content.rstrip('\n') + f'\n{section}:\n  {key}: {value}\n', True
+
+changes = []
+for section, key, ip, port, apikey in [
+    ('sonarr', 'apikey', 'sonarr', 8989, sonarr_key),
+    ('radarr', 'apikey', 'radarr', 7878, radarr_key),
+]:
+    if get_val(content, section, 'ip') is None:
+        # Section missing — write the whole block
+        content = content.rstrip('\n') + (
+            f'\n{section}:\n  ip: {ip}\n  port: {port}\n'
+            f'  apikey: {apikey}\n  ssl: false\n  base_url: ""\n'
+        )
+        changes.append(section)
+    elif get_val(content, section, key) != apikey:
+        content, _ = set_val(content, section, key, apikey)
+        changes.append(section)
+
+if changes:
+    with open(cfg_path, 'w') as f:
+        f.write(content)
+    print('UPDATED:' + ','.join(changes))
 else:
-    status, _ = bapi("POST", "/sonarr", {
-        "enabled":              True,
-        "ip":                   "sonarr",
-        "port":                 8989,
-        "apikey":               "${SONARR_KEY}",
-        "ssl":                  False,
-        "base_url":             "/",
-        "only_monitored":       False,
-        "series_sync":          60,
-        "excluded_tags":        [],
-        "excluded_series_types": [],
-        "use_ffprobe_cache":    True,
-        "defer_search_after_sync": False,
-    })
-    results.append("SONARR_OK" if status in (200, 204) else f"SONARR_ERR_{status}")
-
-# ── Radarr ──────────────────────────────────────────────────────────────────
-status, current = bapi("GET", "/radarr")
-if status == 200 and current.get("enabled"):
-    results.append("RADARR_EXISTS")
-else:
-    status, _ = bapi("POST", "/radarr", {
-        "enabled":        True,
-        "ip":             "radarr",
-        "port":           7878,
-        "apikey":         "${RADARR_KEY}",
-        "ssl":            False,
-        "base_url":       "/",
-        "only_monitored": False,
-        "movies_sync":    60,
-        "excluded_tags":  [],
-    })
-    results.append("RADARR_OK" if status in (200, 204) else f"RADARR_ERR_{status}")
-
-print(" ".join(results))
+    print('ALREADY_OK')
 PYEOF
     )
 
-    echo "$bazarr_result" | grep -q "SONARR_OK"     && ok   "Bazarr → Sonarr connected" \
-      || { echo "$bazarr_result" | grep -q "SONARR_EXISTS" && skip "Bazarr → Sonarr already configured" \
-        || warn "Bazarr → Sonarr failed: $(echo "$bazarr_result" | grep -oP 'SONARR_ERR_\S+')"; }
-
-    echo "$bazarr_result" | grep -q "RADARR_OK"     && ok   "Bazarr → Radarr connected" \
-      || { echo "$bazarr_result" | grep -q "RADARR_EXISTS" && skip "Bazarr → Radarr already configured" \
-        || warn "Bazarr → Radarr failed: $(echo "$bazarr_result" | grep -oP 'RADARR_ERR_\S+')"; }
+    if [[ "$bazarr_result" == UPDATED:* ]]; then
+      ok "Bazarr config updated (${bazarr_result#UPDATED:}) — restarting Bazarr"
+      docker restart bazarr >/dev/null 2>&1 || true
+    elif [[ "$bazarr_result" == "ALREADY_OK" ]]; then
+      skip "Bazarr already connected to Radarr and Sonarr"
+    else
+      warn "Bazarr config update failed: $bazarr_result"
+      warn "Configure manually: http://localhost:6767 → Settings → Sonarr / Radarr"
+    fi
   fi
 fi
 

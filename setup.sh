@@ -399,28 +399,32 @@ cat >> "$TODO" <<EOF
       \`SONARR_QUALITY_PROFILE=1080p\`
       Re-run \`./configure.sh\` so Fetcharr picks up the new profile name.
 
-### Plex — create media libraries
+### Plex — verify media libraries
 - [ ] Open Plex at http://$(${USE_MACVLAN} && echo "${PLEX_LAN_IP}" || echo "localhost"):32400
+      \`configure.sh\` creates both libraries automatically. If they are missing:
 - [ ] Add movie library → folder: \`/media/movies\`
 - [ ] Add TV library → folder: \`/media/tv\`
 
 ### Tautulli — scrobbler OAuth
-- [ ] Run to authenticate the Trakt scrobbler:
-      \`docker exec -it tautulli python /scripts/trakt_scrobbler.py --setup\`
-      Follow the OAuth flow. Token saves to \`/scripts/trakt_tokens.json\` inside the container.
+- [ ] \`configure.sh\` runs this automatically. If it failed or you need to re-authenticate:
+      \`cd config/tautulli/scripts && python3 trakt_scrobbler.py --setup && cd -\`
+      Run from the project root on the host (not inside Docker).
+      Token saves to \`config/tautulli/scripts/trakt_tokens.json\`.
 EOF
 
 if $USE_TRAKT; then
 cat >> "$TODO" <<EOF
 
 ### Trakt — watchlist sync OAuth
-- [ ] Run: \`docker compose ${COMPOSE_FILES} run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup\`
+- [ ] \`configure.sh\` runs this automatically. If it failed or you need to re-authenticate:
+      \`docker compose ${COMPOSE_FILES} run --rm trakt-watchlist-sync python /app/trakt-watchlist-sync.py --setup\`
       Visit the URL shown, enter the code, authorize. Then restart: \`./stop.sh && ./start.sh\`
 
 ### Trakt — cleanup webhooks
-- [ ] Radarr → Settings → Connect → Add → Webhook
+- [ ] Configured automatically by \`configure.sh\`. If missing, add manually:
+      Radarr → Settings → Connect → Add → Webhook
       URL: \`http://trakt-watchlist-cleanup:5000/radarr\`  Trigger: On Movie Delete
-- [ ] Sonarr → Settings → Connect → Add → Webhook
+      Sonarr → Settings → Connect → Add → Webhook
       URL: \`http://trakt-watchlist-cleanup:5000/sonarr\`  Trigger: On Series Delete
 EOF
 fi

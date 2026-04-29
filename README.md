@@ -10,6 +10,7 @@ A fully automated, self-hosted media server. Add something to your Trakt watchli
 git clone <repo> bye-netflix && cd bye-netflix
 ./setup.sh
 ./start.sh
+./configure.sh
 ```
 
 `setup.sh` asks what you need, generates `.env` and `start.sh`, and prints next steps.
@@ -124,3 +125,33 @@ Radarr/Sonarr copy on import (cross-filesystem). The SSD is purely a staging are
 All credentials, paths, and network settings live in `.env`. See `.env.example` for the full reference with descriptions.
 
 See [SETUP.md](SETUP.md) for the complete setup walkthrough.
+
+
+<!-- PORTFOLIO_METADATA_START -->
+<div align="center">
+  <h3>📊 Portfolio Metadata</h3>
+  <p><em>This section is used for automatic project information extraction</em></p>
+</div>
+
+### 📜 Project Overview
+
+Bye Netflix is a fully automated, self-hosted media server stack. Add a movie or show to your Trakt watchlist and it downloads automatically, streams through Plex, scrobbles back to Trakt, and fetches subtitles — all without touching a single UI. A single setup script configures every service end-to-end.
+
+### 🎯 Key Features
+- Add to Trakt watchlist → automatically queued in Radarr/Sonarr and downloaded
+- Full VPN routing for torrents via Gluetun (AirVPN, Mullvad, ProtonVPN, and more)
+- Play/pause/stop events scrobbled back to Trakt in real time
+- Progressive episode pre-fetching: next season downloads as you finish the current one
+- Automatic subtitle downloads via Bazarr
+- Modular Docker Compose design — enable only the services you need
+- One `setup.sh` + `configure.sh` flow: generates config, wires all service APIs together, handles OAuth
+
+### 🛠️ Technology Stack
+- Docker / Docker Compose
+- Python
+- Plex, Radarr, Sonarr, Prowlarr
+- Tautulli, Bazarr, Fetcharr
+- Deluge, SABnzbd
+- Gluetun VPN
+<!-- PORTFOLIO_METADATA_END -->
+

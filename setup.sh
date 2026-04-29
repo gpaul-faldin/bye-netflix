@@ -357,9 +357,8 @@ fi
 
 cat >> "$TODO" <<EOF
 - [ ] Write Fetcharr config with Plex token + API keys <!-- auto:fetcharr-config -->
-- [ ] Copy and configure Tautulli scripts <!-- auto:tautulli-scripts -->
-- [ ] Create Tautulli notification agent: Trakt Scrobbler <!-- auto:tautulli-scrobbler -->
-- [ ] Create Tautulli notification agent: Progressive Downloader <!-- auto:tautulli-downloader -->
+- [ ] Copy Tautulli scripts and patch credentials <!-- auto:tautulli-scripts -->
+- [ ] Authenticate Trakt scrobbler (OAuth — interactive prompt) <!-- auto:tautulli-scrobbler -->
 EOF
 
 if $USE_TRAKT; then
@@ -402,12 +401,52 @@ cat >> "$TODO" <<EOF
 ### Plex — verify media libraries
 - [ ] Open Plex at http://$(${USE_MACVLAN} && echo "${PLEX_LAN_IP}" || echo "localhost"):32400
       \`configure.sh\` creates both libraries automatically. If they are missing:
-- [ ] Add movie library → folder: \`/media/movies\`
-- [ ] Add TV library → folder: \`/media/tv\`
+      Add movie library → folder: \`/media/movies\`
+      Add TV library   → folder: \`/media/tv\`
 
-### Tautulli — scrobbler OAuth
-- [ ] \`configure.sh\` runs this automatically. If it failed or you need to re-authenticate:
-      \`cd config/tautulli/scripts && python3 trakt_scrobbler.py --setup && cd -\`
+### Tautulli — connect to Plex
+- [ ] Open http://localhost:8181 → Settings → Plex Media Server
+      - Plex IP or Hostname: \`plex\`  (the Docker container name — not \`localhost\`)
+      - Plex Port: \`32400\`
+      - Click **Verify Server** → then **Fetch New Token** → sign in → **Save**
+
+### Tautulli — add notification agents
+Both scripts are already in \`/scripts\` with credentials patched by \`configure.sh\`.
+Open http://localhost:8181 → Settings → Notification Agents → **Add** → **Script**
+
+#### Trakt Scrobbler
+| Field | Value |
+|---|---|
+| Script Folder | \`/scripts\` |
+| Script File | \`trakt_scrobbler.py\` |
+| Script Timeout | \`30\` |
+
+**Triggers:** Playback Start, Playback Stop, Playback Pause, Playback Resume
+
+**Arguments** (paste the same line for every trigger):
+\`\`\`
+--action {action} --user {username} --title "{title}" --year {year} --progress {progress_percent} --duration {duration} --show_name "{show_name}" --season_num {season_num} --episode_num {episode_num} --tmdb_id {tmdb_id} --tvdb_id {thetvdb_id} --imdb_id {imdb_id}
+\`\`\`
+
+#### Progressive Downloader
+| Field | Value |
+|---|---|
+| Script Folder | \`/scripts\` |
+| Script File | \`plex_progressive_downloader.py\` |
+| Script Timeout | \`30\` |
+
+**Triggers:** Playback Start only
+
+**Conditions:** Media Type · is · episode
+
+**Arguments** (Playback Start):
+\`\`\`
+-tvid {thetvdb_id} -sn {season_num} -en {episode_num}
+\`\`\`
+
+### Tautulli — scrobbler re-authentication
+\`configure.sh\` handles this automatically on first run. If it failed or token expired:
+- [ ] \`cd config/tautulli/scripts && python3 trakt_scrobbler.py --setup && cd -\`
       Run from the project root on the host (not inside Docker).
       Token saves to \`config/tautulli/scripts/trakt_tokens.json\`.
 EOF

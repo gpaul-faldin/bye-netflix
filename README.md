@@ -15,6 +15,8 @@ git clone <repo> bye-netflix && cd bye-netflix
 
 `setup.sh` asks what you need, generates `.env` and `start.sh`, and prints next steps.
 
+**No premium accounts required.** A free Plex account and a free Trakt account are all you need. Plex Pass is not required.
+
 ---
 
 ## Architecture
